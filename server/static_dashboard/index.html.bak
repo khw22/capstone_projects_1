@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>중앙 서버 대시보드</title>
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <h1>중앙 서버 모니터링 대시보드</h1>
+            <span class="subtitle">CCTV 기반 환경 적응형 오염 모니터링</span>
+        </div>
+        <nav class="nav">
+            <a href="#realtime" class="active">실시간 CCTV 상태</a>
+            <a href="#pollution">오염도 현황</a>
+            <a href="#th">실시간 확산 경로</a>
+            <a href="#events">이벤트 기록</a>
+            <a href="#settings">설정</a>
+        </nav>
+        <div class="api-status" id="api-status">
+            <span class="dot" id="api-status-dot"></span>
+            <span id="api-status-text">API 연결 확인 중…</span>
+        </div>
+        <!-- 💡 우측 상단 날씨 및 검색 위젯 (여기에 추가!) -->
+        <div class="weather-widget">
+            <div class="weather-search">
+                <input type="text" id="weather-input" placeholder="지역명 검색 (예: 서울, 제주)" />
+                <button id="btn-weather-search">🔍</button>
+            </div>
+            <div class="weather-info">
+                <span id="w-location">현재 위치</span>
+                <span id="w-icon">☀️</span>
+                <span id="w-temp">--°C</span>
+                <span id="w-hum">💧--%</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="content">
+        <section id="realtime" class="panel">
+            <h2>실시간 CCTV 상태</h2>
+            <div class="cards">
+                <div class="card stat">
+                    <span class="label">연결된 장치</span>
+                    <span class="value" id="stat-online">3 / 5</span>
+                </div>
+                <div class="card stat">
+                    <span class="label">스트리밍 정상</span>
+                    <span class="value ok" id="stat-streaming">3</span>
+                </div>
+                <div class="card stat">
+                    <span class="label">오프라인</span>
+                    <span class="value warn" id="stat-offline">2</span>
+                </div>
+                <div class="card stat">
+                    <span class="label">서버 상태</span>
+                    <span class="value ok" id="stat-server">정상</span>
+                </div>
+            </div>
+
+            <h3>CCTV 목록</h3>
+            <table class="data-table" id="cctv-table">
+                <thead>
+                    <tr>
+                        <th>장치 ID</th>
+                        <th>위치</th>
+                        <th>상태</th>
+                        <th>FPS</th>
+                        <th>모델 버전</th>
+                        <th>최근 통신</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </section>
+
+        <section id="pollution" class="panel">
+            <h2>오염도 현황 <span class="badge unbacked">미연동</span></h2>
+            <p class="note">
+                ※ 오염도 점수는 현재 통신 규약(v0.1)에 정의되어 있지 않아 백엔드에서
+                제공되지 않습니다. 프로토콜 확장 후 연동 예정입니다.
+            </p>
+            <h3>장치별 오염도 점수</h3>
+            <table class="data-table" id="pollution-table">
+                <thead>
+                    <tr>
+                        <th>장치 ID</th>
+                        <th>위치</th>
+                        <th>최근 점수</th>
+                        <th>등급</th>
+                        <th>측정 시각</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </section>
+
+        <!-- 💡 [신규] 기기 수치 판독 섹션 -->
+        <section id="ocr-section" class="panel">
+            <div class="section-header">
+                <h2 style="margin: 0; color: #4ea1ff;">⏱️ 실시간 기기 수치 판독 (OCR)</h2>
+            </div>
+            <p class="note">※ CCTV 영상 내의 시계, 온습도계 등의 수치를 AI가 판독하여 표시합니다.</p>
+            <table class="data-table" id="ocr-table">
+                <thead>
+                    <tr>
+                        <th>장치 ID</th>
+                        <th>측정 시각</th>
+                        <th>판독된 수치</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td colspan="3" class="muted">아직 측정된 수치가 없습니다.</td></tr>
+                </tbody>
+            </table>
+        </section>
+        
+        <!-- 변경 전: 온습도 정보 섹션을 지우고 아래 내용으로 교체합니다 -->
+<section id="th" class="card">
+    <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+            <h2 style="margin: 0;">🔥 실시간 발화점 추적 현황</h2>
+            <span class="badge ai-active">AI 분석 중</span>
+        </div>
+        <!-- 💡 경보 끄기 버튼 (평소엔 숨겨둠) -->
+        <button id="btn-alarm-off" style="display: none; padding: 6px 12px; cursor: pointer; background: #ff4757; color: white; border: none; border-radius: 4px; font-weight: bold; box-shadow: 0 2px 5px rgba(255,0,0,0.3);">
+            🔕 경보 점멸 끄기
+        </button>
+    </div>
+
+    <p class="help-text">
+        ※ YOLOv8 모델이 화재 객체를 처음 인식한 좌표(발화점)를 추적하여 표시합니다.
+    </p>
+    <div class="table-responsive">
+        <table id="fire-origin-table" class="data-table">
+            <thead>
+                <tr>
+                    <th>장치 ID</th>
+                    <th>발화 감지 시각</th>
+                    <th>실시간 확산 경로 (발화 원점 ➡️ 현재 위치)</th>
+                    <th>위험 등급</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- 데이터가 여기에 표시됩니다 -->
+            </tbody>
+        </table>
+    </div>
+</section>
+
+        <section id="events" class="panel">
+    <!-- 제목과 버튼들을 나란히 배치하는 구역 -->
+    <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
+        <h2 style="margin: 0;">이벤트 기록</h2>
+        <div style="display: flex; gap: 8px;"> <!-- 💡 간격을 위해 gap: 8px 추가 -->
+            
+            <!-- 💡 추가된 원격 영상 경보 끄기 버튼 -->
+            <button id="btn-remote-alarm-off" style="padding: 6px 12px; cursor: pointer; background: #34495e; color: white; border: none; border-radius: 4px; font-weight: bold;">🔕 화재 감지 끄기</button>
+            
+            <button id="btn-export" style="padding: 6px 12px; cursor: pointer; background: #4CAF50; color: white; border: none; border-radius: 4px; font-weight: bold;">💾 엑셀 저장</button>
+            <button id="btn-clear" style="padding: 6px 12px; cursor: pointer; background: #ff6b6b; color: white; border: none; border-radius: 4px; font-weight: bold;">🧹 화면 지우기</button>
+        </div>
+    </div>
+    
+    <table class="data-table" id="events-table" style="margin-top: 15px;">
+        <thead>
+            <tr>
+                <th>시각</th>
+                <th>장치</th>
+                <th>유형</th>
+                <th>내용</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+</section>
+
+        <section id="settings" class="panel">
+            <h2>설정</h2>
+            <div class="cards">
+                <div class="card info">
+                    <span class="label">서버 상태</span>
+                    <span class="value ok">정상</span>
+                </div>
+                <div class="card info">
+                    <span class="label">현재 모델 버전</span>
+                    <span class="value" id="setting-model-version">v0.1.0-dev</span>
+                </div>
+                <div class="card info">
+                    <span class="label">학습 파이프라인</span>
+                    <span class="value">대기 (placeholder)</span>
+                </div>
+                <div class="card info">
+                    <span class="label">규칙셋 배포</span>
+                    <span class="value">미배포 (placeholder)</span>
+                </div>
+            </div>
+            <p class="note">
+                ※ 실시간 CCTV 상태·이벤트 기록은 백엔드 API(<code id="setting-api-base">/</code>)에서
+                실시간으로 가져옵니다. 오염도·온습도는 아직 프로토콜에 정의되지 않아 미연동 상태입니다.
+            </p>
+        </section>
+    </main>
+
+    <footer class="bottombar">
+        <small>CCTV 기반 환경 적응형 통합 관제 시스템</small>
+    </footer>
+
+    <!-- API base URL. Override by editing this value (or set window.API_BASE
+         before script.js loads) for non-localhost deployments. -->
+    <script>
+        window.API_BASE = window.API_BASE || "http://localhost:8000";
+    </script>
+    <script src="script.js"></script>
+</body>
+</html>

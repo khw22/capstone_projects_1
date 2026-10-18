@@ -1,0 +1,19 @@
+{
+  "id": 2,
+  "bbox_xywh": [
+    80,
+    280,
+    32,
+    27
+  ],
+  "detected_at_sec": 11.0,
+  "static_sec": 10.0,
+  "resolution": [
+    608,
+    320
+  ],
+  "class": "broccoli",
+  "confidence": 0.375,
+  "auto_detected": true,
+  "timestamp": "2026-10-15T13:09:31Z"
+}

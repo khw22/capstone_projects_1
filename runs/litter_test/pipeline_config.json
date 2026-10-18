@@ -1,0 +1,11 @@
+{
+  "diff_thr": 20,
+  "min_area": 300,
+  "max_area": 40000,
+  "neighbor_ratio": 0,
+  "dedupe_px": 60,
+  "persist_sec": 8,
+  "exclude_person": true,
+  "bg_interval": 1,
+  "bg_min": 8
+}
