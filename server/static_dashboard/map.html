@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>스마트 시티 지도 관제</title>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+        #map { width: 100%; height: 100vh; }
+
+        #videoModal {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.7); z-index: 100;
+            justify-content: center; align-items: center;
+        }
+        .modal-content {
+            background: white; padding: 20px; border-radius: 8px; width: 800px; max-width: 90%;
+            text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+        #videoPlayer { width: 100%; height: 450px; background: black; margin-top: 10px; }
+        .close-btn { margin-top: 15px; padding: 10px 20px; cursor: pointer; background: #333; color: white; border: none; border-radius: 5px; font-weight: bold;}
+
+        /* CCTV 번호 라벨 (마커 위) */
+        .cam-label {
+            cursor: pointer; user-select: none; text-align: center; white-space: nowrap;
+            background: #1f2a3a; color: #fff; border: 2px solid #fff; border-radius: 6px;
+            padding: 3px 8px; font: bold 12px "Malgun Gothic", sans-serif;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+        }
+        .cam-label small { display: block; font-weight: normal; font-size: 11px; color: #c8d4e6; }
+        
+        .cam-label.fire { border-color: #fff; animation: mapCamFlash 0.8s infinite; }
+        .cam-label.fire small { color: #fff; }
+        @keyframes mapCamFlash {
+            0%, 100% { background: #ff4757; box-shadow: 0 0 6px rgba(255,71,87,0.6); }
+            50%      { background: #ff6b81; box-shadow: 0 0 16px rgba(255,71,87,1); }
+        }
+
+        #mapMsg {
+            display: none; position: fixed; top: 12px; left: 12px; z-index: 50;
+            background: #fff3cd; color: #664d03; border: 1px solid #ffecb5; border-radius: 6px;
+            padding: 8px 12px; font: 13px "Malgun Gothic", sans-serif;
+        }
+
+        /* 화재 발생 상단 팝업 (Toast) 스타일 */
+        #toast-container {
+            position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+            z-index: 200; display: flex; flex-direction: column; gap: 10px;
+        }
+        .toast-msg {
+            background: #e74c3c; color: white; padding: 15px 25px; border-radius: 8px;
+            font-family: "Malgun Gothic", sans-serif; font-weight: bold; font-size: 16px;
+            box-shadow: 0 6px 20px rgba(231,76,60,0.4);
+            animation: slideDown 0.5s cubic-bezier(0.25, 1, 0.5, 1);
+            display: flex; align-items: center; justify-content: space-between; gap: 20px; min-width: 380px;
+        }
+        @keyframes slideDown { from { opacity: 0; transform: translateY(-40px); } to { opacity: 1; transform: translateY(0); } }
+        .toast-close-btn {
+            background: rgba(0,0,0,0.25); border: none; color: white; padding: 6px 12px;
+            border-radius: 5px; font-weight: bold; cursor: pointer; transition: background 0.2s;
+        }
+        .toast-close-btn:hover { background: rgba(0,0,0,0.4); }
+
+        /* 우측 하단 CCTV 상태 패널 */
+        #cctv-status-panel {
+            position: fixed; bottom: 30px; right: 30px; width: 300px; max-height: 350px;
+            background: rgba(255, 255, 255, 0.95); border: 2px solid #2c3e50; border-radius: 10px;
+            z-index: 50; display: flex; flex-direction: column; box-shadow: 0 6px 15px rgba(0,0,0,0.3);
+            font-family: "Malgun Gothic", sans-serif; overflow: hidden;
+        }
+        .panel-header {
+            display: flex; justify-content: space-between; align-items: center;
+            background: #2c3e50; padding: 10px 12px; color: #ecf0f1;
+        }
+        .panel-header h3 { margin: 0; font-size: 14px; font-weight: bold; }
+        
+        /* 사이렌 음소거 버튼 스타일 */
+        .mute-siren-btn {
+            background: #27ae60; color: white; border: none; padding: 4px 8px;
+            border-radius: 4px; font-size: 11px; font-weight: bold; cursor: pointer;
+            transition: background 0.2s;
+        }
+        .mute-siren-btn:hover { background: #219653; }
+        .mute-siren-btn.muted { background: #c0392b; } 
+
+        #cctv-list-container { padding: 10px; overflow-y: auto; flex-grow: 1; }
+
+        .cctv-item {
+            padding: 8px 10px; margin-bottom: 8px; background: #ecf0f1; border-left: 5px solid #27ae60;
+            border-radius: 4px; transition: background 0.2s ease; display: flex;
+            justify-content: space-between; align-items: center; font-size: 13px; font-weight: bold;
+            color: #2c3e50; box-sizing: border-box;
+        }
+        .cctv-item:last-child { margin-bottom: 0; }
+        .cctv-info { display: flex; align-items: center; cursor: pointer; flex-grow: 1; overflow: hidden; }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; background-color: #27ae60; display: inline-block; margin-right: 8px; flex-shrink: 0; transition: background-color 0.3s ease; }
+        .cctv-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .cctv-name small { font-weight: normal; color: #7f8c8d; font-size: 11px; margin-left: 4px; }
+
+        .alarm-off-btn {
+            display: none; padding: 3px 7px; font-size: 11px; font-family: "Malgun Gothic", sans-serif;
+            font-weight: bold; color: #fff; background-color: #34495e; border: 1px solid #ffffff;
+            border-radius: 4px; cursor: pointer; margin-left: 6px; flex-shrink: 0;
+        }
+        .alarm-off-btn:hover { background-color: #1a252f; }
+
+        .cctv-item.fire { color: white; border-left-color: #c0392b; animation: itemFlash 0.8s infinite; }
+        .cctv-item.fire .cctv-name small { color: #ffeaa7; }
+        .cctv-item.fire .status-dot { background-color: #ffffff; }
+        .cctv-item.fire .alarm-off-btn { display: inline-block; }
+        @keyframes itemFlash { 0%, 100% { background: #ff4757; } 50% { background: #e74c3c; } }
+
+        /* 좌측 하단 주소 로그 패널 스타일 */
+        #address-log-panel {
+            position: fixed; bottom: 30px; left: 30px; width: 360px; max-height: 400px;
+            background: rgba(255, 255, 255, 0.95); border: 2px solid #e74c3c; border-radius: 10px;
+            z-index: 50; display: flex; flex-direction: column; box-shadow: 0 6px 15px rgba(0,0,0,0.3);
+            font-family: "Malgun Gothic", sans-serif; overflow: hidden;
+        }
+        .address-header {
+            display: flex; justify-content: space-between; align-items: center;
+            background: #e74c3c; padding: 10px 12px; color: white;
+        }
+        .address-header h3 { margin: 0; font-size: 14px; font-weight: bold; }
+        .clear-all-btn {
+            background: white; color: #e74c3c; border: none; padding: 4px 8px;
+            border-radius: 4px; font-size: 11px; font-weight: bold; cursor: pointer;
+        }
+        .clear-all-btn:hover { background: #fdf2e9; }
+        #address-list-container { padding: 10px; overflow-y: auto; flex-grow: 1; display: flex; flex-direction: column; gap: 8px; }
+        
+        .address-item {
+            background: #fdf2e9; border-left: 4px solid #d35400; padding: 10px;
+            border-radius: 4px; display: flex; flex-direction: column; gap: 6px;
+            font-size: 12px; font-weight: bold; color: #333; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            animation: slideInLeft 0.3s ease-out;
+        }
+        @keyframes slideInLeft { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
+        .address-text { line-height: 1.4; word-break: keep-all; flex-grow: 1; }
+        
+        /* 💡 119 신고 복사 버튼 추가 스타일 */
+        .action-buttons { display: flex; gap: 5px; justify-content: flex-end; margin-top: 4px;}
+        .report-119-btn {
+            background: #c0392b; color: white; border: none; padding: 5px 10px;
+            border-radius: 4px; font-size: 11px; font-weight: bold; cursor: pointer; transition: background 0.2s;
+        }
+        .report-119-btn:hover { background: #e74c3c; }
+        .address-del-btn {
+            background: #95a5a6; color: white; border: none; padding: 5px 10px;
+            border-radius: 4px; font-size: 11px; cursor: pointer; flex-shrink: 0;
+        }
+        .address-del-btn:hover { background: #7f8c8d; }
+    </style>
+</head>
+<body>
+
+    <div id="map"></div>
+    <div id="mapMsg"></div>
+
+    <audio id="sirenSound" src="siren.mp3" loop preload="auto"></audio>
+    <div id="toast-container"></div>
+
+    <div id="cctv-status-panel">
+        <div class="panel-header">
+            <h3>📹 CCTV 실시간 관제 현황</h3>
+            <button id="muteSirenBtn" class="mute-siren-btn" onclick="toggleMuteSiren()">🔊 소리 켜짐</button>
+        </div>
+        <div id="cctv-list-container"></div>
+    </div>
+
+    <!-- 💡 수정된 좌측 하단 로그 패널 -->
+    <div id="address-log-panel">
+        <div class="address-header">
+            <h3>🚨 화재 발생 위치 및 신고 로그</h3>
+            <button class="clear-all-btn" onclick="clearAllAddresses()">전체 삭제</button>
+        </div>
+        <div id="address-list-container"></div>
+    </div>
+
+    <div id="videoModal">
+        <div class="modal-content">
+            <h2 id="modalTitle">구역 CCTV AI 분석</h2>
+            <div id="videoPlayer">
+                <img id="videoStream" src="" alt="AI 영상 로딩중..." style="width: 100%; height: 100%; object-fit: contain;">
+            </div>
+            <button class="close-btn" onclick="closeModal()">관제 종료</button>
+        </div>
+    </div>
+
+    <script type="text/javascript" src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=84abb3019d693104fc5e2f9bb975821f&libraries=services"></script>
+    <script>
+        var mapContainer = document.getElementById('map');
+        var mapOption = { center: new kakao.maps.LatLng(37.3908, 126.9195), level: 3 };
+        var map = new kakao.maps.Map(mapContainer, mapOption);
+
+        var polygonPath = [
+            new kakao.maps.LatLng(37.3935, 126.9160), new kakao.maps.LatLng(37.3935, 126.9230),
+            new kakao.maps.LatLng(37.3880, 126.9230), new kakao.maps.LatLng(37.3880, 126.9160)
+        ];
+        var polygon = new kakao.maps.Polygon({
+            path: polygonPath, strokeWeight: 3, strokeColor: '#FF3DE5', strokeOpacity: 0.8,
+            fillStyle: 'solid', fillColor: '#FF8AEF', fillOpacity: 0.4
+        });
+        polygon.setMap(map);
+
+        var geocoder = new kakao.maps.services.Geocoder(); 
+
+        var FIRE_WINDOW_MS = 15000;
+        var POLL_MS = 2000;           
+        var cameras = [];
+        var labels = {};              
+        var panelItems = {};          
+        
+        var toastState = {};      
+        var panelState = {};      
+        var addressState = {}; 
+        var isSirenMuted = false;
+
+        // 💡 확산 예측 부채꼴(Polygon)을 담을 객체
+        var spreadPolygons = {};
+
+        // 💡 화재 확산 예측 범위 그리기 함수
+        function drawSpreadPrediction(cam) {
+            if (spreadPolygons[cam.id]) return; // 이미 그려져 있으면 패스
+
+            // 시연용 설정: 현재 계절(바람) 풍향을 임의로 '북서풍(남동쪽 135도 방향으로 불어감)'으로 고정
+            var windAngle = 135; 
+            var dist = 0.002; // 확산 반경 (지도 위 거리)
+            var spreadAngle = 35; // 부채꼴 퍼짐 각도 (좌우 35도)
+
+            var radCenter = windAngle * Math.PI / 180;
+            var radLeft = (windAngle - spreadAngle) * Math.PI / 180;
+            var radRight = (windAngle + spreadAngle) * Math.PI / 180;
+
+            var p1 = new kakao.maps.LatLng(cam.lat, cam.lng);
+            // 한국의 위/경도 비율을 고려해 y(lat)와 x(lng) 계산
+            var p2 = new kakao.maps.LatLng(cam.lat + Math.cos(radLeft)*dist, cam.lng + Math.sin(radLeft)*dist*1.25);
+            var p3 = new kakao.maps.LatLng(cam.lat + Math.cos(radRight)*dist, cam.lng + Math.sin(radRight)*dist*1.25);
+
+            var spreadPolygon = new kakao.maps.Polygon({
+                path: [p1, p2, p3], 
+                strokeWeight: 2,
+                strokeColor: '#e74c3c',
+                strokeOpacity: 0.8,
+                fillStyle: 'solid',
+                fillColor: '#ff7675',
+                fillOpacity: 0.5
+            });
+
+            spreadPolygon.setMap(map);
+            spreadPolygons[cam.id] = spreadPolygon;
+        }
+
+        // 💡 확산 예측 범위 지우기 함수
+        function removeSpreadPrediction(camId) {
+            if (spreadPolygons[camId]) {
+                spreadPolygons[camId].setMap(null);
+                delete spreadPolygons[camId];
+            }
+        }
+
+        // 💡 119 신고 문안 자동 복사 함수
+        function copy119(address, camName) {
+            var timeStr = new Date().toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit' });
+            var text = `[스마트 관제 긴급 화재신고]\n- 발생시간: ${timeStr}\n- 발생지: ${address}\n- 상세구역: ${camName} CCTV 화재 감지\n- 특이사항: 풍향 영향으로 남동쪽 화재 확산 우려\n- 즉시 출동 바랍니다.`;
+            
+            navigator.clipboard.writeText(text).then(function() {
+                alert("✅ 119 신고 문안이 클립보드에 복사되었습니다.\n웹 신고창이나 메신저에 바로 붙여넣기(Ctrl+V) 하세요.\n\n" + text);
+            }).catch(function() {
+                alert("복사에 실패했습니다.");
+            });
+        }
+
+        function toggleMuteSiren() {
+            isSirenMuted = !isSirenMuted;
+            var btn = document.getElementById('muteSirenBtn');
+            var siren = document.getElementById('sirenSound');
+
+            if (isSirenMuted) {
+                btn.textContent = "🔇 사이렌 음소거";
+                btn.classList.add('muted');
+                if (siren) { siren.pause(); }
+            } else {
+                btn.textContent = "🔊 소리 켜짐";
+                btn.classList.remove('muted');
+                var container = document.getElementById('toast-container');
+                if (container && container.children.length > 0 && siren) {
+                    siren.play().catch(function(e){});
+                }
+            }
+        }
+
+        function showMsg(text) {
+            var el = document.getElementById('mapMsg');
+            el.textContent = text;
+            el.style.display = 'block';
+        }
+
+        function showToast(cam) {
+            var container = document.getElementById('toast-container');
+            var toast = document.createElement('div');
+            toast.className = 'toast-msg';
+            toast.id = 'toast-' + cam.id;
+            
+            // 💡 팝업에 풍향 경고 메시지 추가
+            toast.innerHTML = `
+                <div style="display: flex; flex-direction: column; gap: 5px;">
+                    <span>🔥 [${cam.id}] ${cam.name ? cam.name + ' 구역 ' : ''}화재 감지!</span>
+                    <span style="font-size: 13px; font-weight: normal; color: #ffcccc;">📍 상세주소: ${cam.address || '위치 확인 중...'}</span>
+                    <span style="font-size: 12px; font-weight: normal; color: #ffeaa7;">⚠️ 풍향 데이터 연동: 남동쪽 방향 확산 주의</span>
+                </div>
+                <button class="toast-close-btn" onclick="muteToast('${cam.id}')">팝업 닫기</button>
+            `;
+            container.appendChild(toast);
+
+            if (!isSirenMuted) {
+                document.getElementById('sirenSound').play().catch(function(e){});
+            }
+        }
+
+        function hideToast(camId) {
+            var toast = document.getElementById('toast-' + camId);
+            if (toast) { toast.remove(); }
+
+            var container = document.getElementById('toast-container');
+            if (container && container.children.length === 0) {
+                var siren = document.getElementById('sirenSound');
+                if (siren) {
+                    siren.pause();
+                    siren.currentTime = 0;
+                }
+            }
+        }
+
+        function muteToast(camId) {
+            toastState[camId] = 'DISMISSED';
+            hideToast(camId);
+        }
+
+        function mutePanel(camId) {
+            panelState[camId] = 'DISMISSED';
+            var el = labels[camId];
+            if (el) { el.classList.remove('fire'); el.querySelector('.cam-title').textContent = camId; }
+            var pEl = panelItems[camId];
+            if (pEl) { pEl.classList.remove('fire'); }
+        }
+
+        function logAddress(cam) {
+            var container = document.getElementById('address-list-container');
+            var item = document.createElement('div');
+            item.className = 'address-item';
+            var timeStr = new Date().toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            
+            // 💡 119 신고 복사 버튼 추가
+            item.innerHTML = `
+                <div class="address-text">
+                    <span style="color: #c0392b; font-size: 11px;">[${timeStr}] ${cam.name || cam.id}</span><br>
+                    📍 ${cam.address}
+                </div>
+                <div class="action-buttons">
+                    <button class="report-119-btn" onclick="copy119('${cam.address}', '${cam.name || cam.id}')">🚨 119 신고 복사</button>
+                    <button class="address-del-btn" onclick="this.parentElement.parentElement.remove()">삭제</button>
+                </div>
+            `;
+            container.prepend(item);
+        }
+
+        function clearAllAddresses() {
+            document.getElementById('address-list-container').innerHTML = '';
+        }
+
+        function makeLabel(cam) {
+            var el = document.createElement('div');
+            el.className = 'cam-label';
+            var title = document.createElement('span');
+            title.className = 'cam-title';
+            title.textContent = cam.id;
+            el.appendChild(title);
+            if (cam.name) {
+                var small = document.createElement('small');
+                small.textContent = cam.name;
+                el.appendChild(small);
+            }
+            el.addEventListener('click', function () { openCamera(cam); });
+            return el;
+        }
+
+        function addCamera(cam) {
+            geocoder.coord2Address(cam.lng, cam.lat, function(result, status) {
+                if (status === kakao.maps.services.Status.OK) {
+                    cam.address = result[0].address.address_name;
+                } else {
+                    cam.address = '경기 안양시 만안구 삼덕로37번길 22 (기본)';
+                }
+            });
+
+            var position = new kakao.maps.LatLng(cam.lat, cam.lng);
+            var marker = new kakao.maps.Marker({ position: position, map: map });
+            kakao.maps.event.addListener(marker, 'click', function () { openCamera(cam); });
+
+            var el = makeLabel(cam);
+            new kakao.maps.CustomOverlay({
+                map: map, position: position, content: el, xAnchor: 0.5, yAnchor: 2.3, zIndex: 3
+            });
+            labels[cam.id] = el;
+
+            var panelContainer = document.getElementById('cctv-list-container');
+            var itemEl = document.createElement('div');
+            itemEl.className = 'cctv-item';
+            
+            itemEl.innerHTML = `
+                <div class="cctv-info">
+                    <span class="status-dot"></span>
+                    <span class="cctv-name">${cam.id}<small>${cam.name ? ' (' + cam.name + ')' : ''}</small></span>
+                </div>
+                <button class="alarm-off-btn">경보 끄기</button>
+            `;
+
+            itemEl.querySelector('.cctv-info').addEventListener('click', function () { openCamera(cam); });
+            itemEl.querySelector('.alarm-off-btn').addEventListener('click', function (e) {
+                e.stopPropagation();
+                mutePanel(cam.id);
+            });
+
+            panelContainer.appendChild(itemEl);
+            panelItems[cam.id] = itemEl;
+        }
+
+        function openCamera(cam) {
+            if (toastState[cam.id] === 'DISMISSED') toastState[cam.id] = 'IDLE';
+            if (panelState[cam.id] === 'DISMISSED') panelState[cam.id] = 'IDLE';
+            addressState[cam.id] = 'IDLE';
+
+            var moveLatLon = new kakao.maps.LatLng(cam.lat, cam.lng);
+            map.setLevel(2, {animate: true});
+            setTimeout(function() { map.panTo(moveLatLon); }, 100);
+
+            document.getElementById('modalTitle').innerText =
+                cam.id + (cam.name ? ' (' + cam.name + ')' : '') + ' 화재/오염 분석중';
+            document.getElementById('videoModal').style.display = 'flex';
+            document.getElementById('videoStream').src =
+                '/api/stream_video?camera=' + encodeURIComponent(cam.id) + '&loop=true';
+        }
+
+        function pollFire() {
+            cameras.forEach(function (cam) {
+                fetch('/api/devices/' + encodeURIComponent(cam.id) + '/events?limit=30')
+                    .then(function (r) { return r.ok ? r.json() : { events: [] }; })
+                    .then(function (data) {
+                        var nowMs = Date.now();
+                        var latest = 0;
+                        
+                        (data.events || []).forEach(function (e) {
+                            if (e.event_type === 'fire_tracking') {
+                                var t = Date.parse(e.timestamp);
+                                if (!isNaN(t) && t > latest) latest = t;
+                            }
+                        });
+                        
+                        var isFireNow = (latest > 0 && (nowMs - latest) <= FIRE_WINDOW_MS);
+                        
+                        if (isFireNow) {
+                            // 💡 화재 발생 시 풍향 예측 범위 그리기
+                            drawSpreadPrediction(cam);
+
+                            if (!addressState[cam.id] || addressState[cam.id] === 'IDLE') {
+                                addressState[cam.id] = 'LOGGED';
+                                logAddress(cam);
+                            }
+
+                            if (!toastState[cam.id] || toastState[cam.id] === 'IDLE') {
+                                toastState[cam.id] = 'ACTIVE';
+                                showToast(cam);
+                            }
+
+                            if (!panelState[cam.id] || panelState[cam.id] === 'IDLE') {
+                                panelState[cam.id] = 'ACTIVE';
+                                var el = labels[cam.id];
+                                if (el) { el.classList.add('fire'); el.querySelector('.cam-title').textContent = '🔥 ' + cam.id; }
+                                var pEl = panelItems[cam.id];
+                                if (pEl) { pEl.classList.add('fire'); }
+                            }
+                        } else {
+                            // 💡 화재 종료 시 풍향 예측 범위 삭제
+                            removeSpreadPrediction(cam.id);
+
+                            if (toastState[cam.id] === 'DISMISSED') { toastState[cam.id] = 'IDLE'; }
+                            if (panelState[cam.id] === 'DISMISSED') { panelState[cam.id] = 'IDLE'; }
+
+                            if ((!toastState[cam.id] || toastState[cam.id] === 'IDLE') && 
+                                (!panelState[cam.id] || panelState[cam.id] === 'IDLE')) {
+                                addressState[cam.id] = 'IDLE';
+                            }
+                        }
+                    })
+                    .catch(function () { /* 에러 무시 */ });
+            });
+        }
+
+        fetch('/api/cameras')
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (data) {
+                cameras = data.cameras || [];
+                if (!cameras.length) { showMsg('등록된 CCTV 가 없습니다. cameras.json 을 확인하세요.'); return; }
+                cameras.forEach(addCamera);
+                pollFire();
+                setInterval(pollFire, POLL_MS);
+            })
+            .catch(function (err) {
+                showMsg('CCTV 목록을 불러오지 못했습니다 (' + err.message + '). 서버(main.py)를 최신 버전으로 실행했는지 확인하세요.');
+            });
+
+        function closeModal() {
+            document.getElementById('videoModal').style.display = 'none';
+            document.getElementById('videoStream').src = "";
+        }
+    </script>
+</body>
+</html>

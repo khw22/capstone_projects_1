@@ -9,22 +9,67 @@ let isAlarmAcknowledged = false; // 관리자가 경보를 껐는지 여부
 let isFireCurrentlyActive = false; // 현재 불이 나고 있는 상태인지
 
 async function apiGet(path) {
-    const res = await fetch(`${API_BASE}${path}`, {
-        headers: { "Accept": "application/json" },
-    });
-    let body = null;
-    try { body = await res.json(); } catch (_) {}
-    if (!res.ok || (body && body.ok === false)) {
-        const code = body && body.error ? body.error.code : `http_${res.status}`;
-        const msg = body && body.error ? body.error.message : res.statusText;
-        throw new Error(`[${code}] ${msg}`);
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 8000);   // 서버가 멈춰도 화면 갱신이 영원히 대기하지 않게
+    try {
+        const res = await fetch(`${API_BASE}${path}`, {
+            headers: { "Accept": "application/json" },
+            signal: ctl.signal,
+        });
+        let body = null;
+        try { body = await res.json(); } catch (_) {}
+        if (!res.ok || (body && body.ok === false)) {
+            const code = body && body.error ? body.error.code : `http_${res.status}`;
+            const msg = body && body.error ? body.error.message : res.statusText;
+            throw new Error(`[${code}] ${msg}`);
+        }
+        return body;
+    } finally {
+        clearTimeout(timer);
     }
-    return body;
 }
 
 function setBody(tableId, html) {
     const tbody = document.querySelector(`#${tableId} tbody`);
     if (tbody) tbody.innerHTML = html;
+}
+
+// ---- 실시간 갱신 설정 (index.html 에서 window.LIVE_MS 등으로 바꿀 수 있음) ----
+const LIVE_MS = window.LIVE_MS || 3000;                                   // 갱신 주기 (ms)
+const FIRE_ACTIVE_MS = window.FIRE_ACTIVE_MS !== undefined ? window.FIRE_ACTIVE_MS : 30000;
+// 마지막 화재 감지 후 이 시간 동안만 '화재 중'(경보/요약). Infinity 로 두면 기록이 남아 있는 동안 계속 경보
+const BUTT_TYPES = ["persistent_change_candidate", "cigarette_butt_detected", "litter_detected"];
+
+// 내용이 바뀐 표만 다시 그린다 (같으면 DOM 을 건드리지 않아 깜빡임/선택 해제/렉이 없다)
+const _liveCache = {};
+function setBodyLive(tableId, html) {
+    if (_liveCache[tableId] === html) return false;
+    _liveCache[tableId] = html;
+    setBody(tableId, html);
+    return true;
+}
+function hashKey(str) {
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+    return (h >>> 0).toString(36);
+}
+function evKey(e) { return hashKey(`${e.device_id}|${e.timestamp}|${e.event_type}|${e.message}`); }
+
+// 새로 들어온 행을 잠깐 노랗게 표시
+(function injectLiveStyle() {
+    const st = document.createElement("style");
+    st.textContent = "@keyframes rowNew{0%{background:#fff3b0}100%{background:transparent}}" +
+                     "tr.row-new td{animation:rowNew 2s ease-out}";
+    document.head.appendChild(st);
+})();
+let seenKeys = new Set();
+let firstLoad = true;
+let lastButtSig = null;
+function flashNew(tableId, newKeys) {
+    if (!newKeys.size) return;
+    document.querySelectorAll(`#${tableId} tbody tr[data-k]`).forEach((tr) => {
+        if (newKeys.has(tr.dataset.k)) tr.classList.add("row-new");
+    });
 }
 
 function colCount(tableId) {
@@ -36,6 +81,25 @@ function fullWidthRow(tableId, text, cls) {
 }
 
 function show(v) { return (v === null || v === undefined || v === "") ? "—" : v; }
+
+// ---- CCTV 번호 + 위치(이름) 표시: "CCTV-01 · 서문시장" ----
+let deviceLocations = {};   // device_id -> 위치(이름)
+function escHtml(v) {
+    return String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function devLabel(id) {
+    if (id === null || id === undefined || id === "") return "—";
+    const loc = deviceLocations[id];
+    return loc ? `${escHtml(id)} · ${escHtml(loc)}` : escHtml(id);
+}
+// 화재 상단 요약: 어느 CCTV 에서 화재가 감지됐는지 한 줄로
+function setFireWhere(ids) {
+    const el = document.getElementById("fire-where");
+    if (!el) return;
+    if (!ids.length) { el.style.display = "none"; el.innerHTML = ""; return; }
+    el.innerHTML = "🔥 화재 감지된 CCTV: " + ids.map((id) => `<b>${devLabel(id)}</b>`).join(" , ");
+    el.style.display = "block";
+}
 
 function fmtTime(iso) {
     if (!iso) return "—";
@@ -63,10 +127,10 @@ function isOnline(dev) { return dev.status === "ok"; }
 
 function renderCctvTable(devices) {
     if (!devices.length) {
-        setBody("cctv-table", fullWidthRow("cctv-table", "등록된 장치가 없습니다.", "muted"));
+        setBodyLive("cctv-table", fullWidthRow("cctv-table", "등록된 장치가 없습니다.", "muted"));
         return;
     }
-    setBody("cctv-table", devices.map((d) => `
+    setBodyLive("cctv-table", devices.map((d) => `
         <tr>
             <td>${show(d.device_id)}</td>
             <td>${show(d.location)}</td>
@@ -100,6 +164,7 @@ function renderStatCards(devices) {
 }
 
 function renderRealtimeUnavailable(message) {
+    delete _liveCache["cctv-table"];   // 서버가 돌아오면 표를 다시 그리도록 캐시 무효화
     setBody("cctv-table", fullWidthRow("cctv-table", message, "error"));
     ["stat-online", "stat-streaming", "stat-offline"].forEach((id) => {
         const el = document.getElementById(id);
@@ -120,13 +185,15 @@ async function loadRealtime() {
 const SEVERITY_LABEL = { info: "정보", warning: "주의", critical: "위험" };
 
 async function loadEvents(devices) {
+    deviceLocations = Object.fromEntries(devices.map((d) => [d.device_id, d.location]));
     if (!devices.length) {
-        if (window.renderButtCandidates) window.renderButtCandidates([]);
-        setBody("events-table", fullWidthRow("events-table", "이벤트가 없습니다.", "muted"));
-        setBody("fire-origin-table", fullWidthRow("fire-origin-table", "장치가 없습니다.", "muted"));
+        setFireWhere([]);
+        if (window.renderButtCandidates && lastButtSig !== "none") { lastButtSig = "none"; window.renderButtCandidates([]); }
+        setBodyLive("events-table", fullWidthRow("events-table", "이벤트가 없습니다.", "muted"));
+        setBodyLive("fire-origin-table", fullWidthRow("fire-origin-table", "장치가 없습니다.", "muted"));
         return;
     }
-    
+
     const results = await Promise.allSettled(
         devices.map((d) =>
             apiGet(`/api/devices/${encodeURIComponent(d.device_id)}/events?limit=100`)
@@ -145,97 +212,125 @@ async function loadEvents(devices) {
     allFetchedEvents = events;
 
     const displayEvents = events.filter(e => new Date(e.timestamp).getTime() >= clearTimestamp);
-    if (window.renderButtCandidates) window.renderButtCandidates(displayEvents);
+
+    // 꽁초 후보 패널은 후보 관련 이벤트가 바뀔 때만 다시 그린다.
+    // (호출할 때마다 장치당 1000건을 다시 조회하고 필터 UI 까지 새로 그리므로 매 갱신마다 부르면 렉이 생긴다)
+    const buttRows = displayEvents.filter((e) => BUTT_TYPES.indexOf(e.event_type) >= 0);
+    const buttSig = `${devices.length}|${buttRows.length}|${buttRows.length ? buttRows[0].timestamp : ""}`;
+    if (window.renderButtCandidates && buttSig !== lastButtSig) {
+        lastButtSig = buttSig;
+        window.renderButtCandidates(displayEvents);
+    }
+
+    const thSection = document.getElementById("th");
+    const btnAlarmOff = document.getElementById("btn-alarm-off");
+    const endAlarm = () => {
+        isFireCurrentlyActive = false;
+        isAlarmAcknowledged = false;
+        if (thSection) thSection.classList.remove("alarm-active");
+        if (btnAlarmOff) btnAlarmOff.style.display = "none";
+    };
 
     if (!displayEvents.length) {
+        setFireWhere([]);
+        endAlarm();
         const msg = anyFailed ? "일부 장치의 이벤트를 불러오지 못했습니다." : "현재 표시할 이벤트가 없습니다.";
-        setBody("events-table", fullWidthRow("events-table", msg, anyFailed ? "error" : "muted"));
-        setBody("fire-origin-table", fullWidthRow("fire-origin-table", "현재 감지된 화재가 없습니다 (안전 상태).", "ok"));
+        setBodyLive("events-table", fullWidthRow("events-table", msg, anyFailed ? "error" : "muted"));
+        setBodyLive("fire-origin-table", fullWidthRow("fire-origin-table", "현재 감지된 화재가 없습니다 (안전 상태).", "ok"));
+        setBodyLive("ocr-table", fullWidthRow("ocr-table", "아직 측정된 수치가 없습니다.", "muted"));
+        firstLoad = false;
         return;
     }
 
+    // 이번에 처음 보는 이벤트 (첫 로드는 제외) -> 행을 잠깐 강조
+    const newKeys = new Set();
+    if (!firstLoad) displayEvents.forEach((e) => { const k = evKey(e); if (!seenKeys.has(k)) newKeys.add(k); });
+
     // 💡 데이터 렌더링 분리 (실시간 추적 vs 일반 이벤트 로그)
     const fireEvents = displayEvents.filter(e => e.event_type === "fire_tracking");
-    
-    // 🔴 [추가] 파이썬에서 보낸 OCR 데이터만 따로 뽑아냅니다.
-    const ocrEvents = displayEvents.filter(e => e.event_type === "ocr_reading"); 
-    
-    // 🔴 [수정] 일반 로그에서는 fire_tracking과 ocr_reading을 둘 다 빼줍니다.
+    const ocrEvents = displayEvents.filter(e => e.event_type === "ocr_reading");
     const logEvents = displayEvents.filter(e => e.event_type !== "fire_tracking" && e.event_type !== "ocr_reading");
-
 
     // 1. 하단 이벤트 기록 렌더링 (logEvents 전용)
     if (logEvents.length === 0) {
-        setBody("events-table", fullWidthRow("events-table", "이벤트가 없습니다.", "muted"));
+        setBodyLive("events-table", fullWidthRow("events-table", "이벤트가 없습니다.", "muted"));
     } else {
-        setBody("events-table", logEvents.map((e) => {
+        setBodyLive("events-table", logEvents.map((e) => {
             const sev = SEVERITY_LABEL[e.severity] || e.severity || "";
-            const type = e.event_type ? `${e.event_type}${sev ? ` (\${sev})` : ""}` : show(sev);
+            const type = e.event_type ? `${e.event_type}${sev ? ` (${sev})` : ""}` : show(sev);
             return `
-            <tr>
+            <tr data-k="${evKey(e)}">
                 <td>${fmtTime(e.timestamp)}</td>
-                <td>${show(e.device_id)}</td>
+                <td>${devLabel(e.device_id)}</td>
                 <td>${type}</td>
                 <td>${show(e.message)}</td>
             </tr>`;
         }).join(""));
     }
 
-    // 2. 상단 화재 추적 현황 렌더링 (fireEvents 전용)
-    const thSection = document.getElementById("th");
-    const btnAlarmOff = document.getElementById("btn-alarm-off");
-
+    // 2. 상단 화재 추적 현황 (fireEvents 전용)
+    //    '화재 중' 판단(점멸 경보/요약)은 최근 FIRE_ACTIVE_MS 안의 감지만 사용. 표에는 기록을 계속 보여 준다.
+    const nowMs = Date.now();
+    const isActive = (e) => (nowMs - new Date(e.timestamp).getTime()) <= FIRE_ACTIVE_MS;
     if (fireEvents.length > 0) {
-        // 💡 불이 새로 났을 때 (기존에 불이 없었는데 새로 생김)
-        if (!isFireCurrentlyActive) {
-            isFireCurrentlyActive = true;
-            isAlarmAcknowledged = false; // 새 화재이므로 경보 해제 상태 초기화
+        const activeFire = fireEvents.filter(isActive);
+        const fireIds = [];
+        activeFire.forEach((e) => { if (fireIds.indexOf(e.device_id) < 0) fireIds.push(e.device_id); });
+        setFireWhere(fireIds);
+
+        if (activeFire.length > 0) {
+            // 💡 불이 새로 났을 때 (기존에 불이 없었는데 새로 생김)
+            if (!isFireCurrentlyActive) {
+                isFireCurrentlyActive = true;
+                isAlarmAcknowledged = false; // 새 화재이므로 경보 해제 상태 초기화
+            }
+            // 💡 관리자가 아직 경보를 끄지 않았다면 빨간색 점멸 켜기!
+            if (!isAlarmAcknowledged) {
+                if (thSection) thSection.classList.add("alarm-active");
+                if (btnAlarmOff) btnAlarmOff.style.display = "block"; // 끄기 버튼 보이기
+            }
+        } else {
+            endAlarm();   // 화재 감지가 끊긴 지 FIRE_ACTIVE_MS 가 지나면 경보 종료
         }
 
-        // 💡 관리자가 아직 경보를 끄지 않았다면 빨간색 점멸 켜기!
-        if (!isAlarmAcknowledged) {
-            thSection.classList.add("alarm-active");
-            btnAlarmOff.style.display = "block"; // 끄기 버튼 보이기
-        }
-
-        setBody("fire-origin-table", fireEvents.map((e) => {
+        setBodyLive("fire-origin-table", fireEvents.map((e) => {
             const sev = SEVERITY_LABEL[e.severity] || e.severity || "";
+            const color = isActive(e) ? "#ff6b6b" : "#8a94a6";
             return `
-            <tr>
-                <td>${show(e.device_id)}</td>
+            <tr data-k="${evKey(e)}">
+                <td>${devLabel(e.device_id)}</td>
                 <td>${fmtTime(e.timestamp)}</td>
-                <td style="font-weight: bold; color: #ff6b6b;">${show(e.message)}</td>
+                <td style="font-weight: bold; color: ${color};">${show(e.message)}</td>
                 <td><span class="badge bad">${sev}</span></td>
             </tr>`;
         }).join(""));
     } else {
         // 💡 불이 꺼졌을 때 (안전 상태)
-        isFireCurrentlyActive = false;
-        isAlarmAcknowledged = false;
-        
-        thSection.classList.remove("alarm-active"); // 점멸 끄기
-        btnAlarmOff.style.display = "none";         // 버튼 숨기기
-        
-        setBody("fire-origin-table", fullWidthRow("fire-origin-table", "현재 감지된 화재가 없습니다 (안전 상태).", "ok"));
+        endAlarm();
+        setFireWhere([]);
+        setBodyLive("fire-origin-table", fullWidthRow("fire-origin-table", "현재 감지된 화재가 없습니다 (안전 상태).", "ok"));
     }
 
     // 3. OCR 판독 결과 렌더링 (최신순 5개까지만 화면에 표시)
     if (ocrEvents.length > 0) {
-        // 가장 최근 데이터 5개만 자르기
-        const recentOcr = ocrEvents.slice(0, 5); 
-        setBody("ocr-table", recentOcr.map((e) => `
-            <tr>
-                <td>${show(e.device_id)}</td>
+        setBodyLive("ocr-table", ocrEvents.slice(0, 5).map((e) => `
+            <tr data-k="${evKey(e)}">
+                <td>${devLabel(e.device_id)}</td>
                 <td>${fmtTime(e.timestamp)}</td>
                 <td style="font-weight: bold; font-size: 16px; color: #2ecc71;">${show(e.message)}</td>
             </tr>
         `).join(""));
     } else {
-        const ocrTableBody = document.querySelector("#ocr-table tbody");
-        if(ocrTableBody) {
-            setBody("ocr-table", fullWidthRow("ocr-table", "아직 측정된 수치가 없습니다.", "muted"));
-        }
+        setBodyLive("ocr-table", fullWidthRow("ocr-table", "아직 측정된 수치가 없습니다.", "muted"));
     }
+
+    flashNew("events-table", newKeys);
+    flashNew("fire-origin-table", newKeys);
+    flashNew("ocr-table", newKeys);
+
+    displayEvents.forEach((e) => seenKeys.add(evKey(e)));
+    if (seenKeys.size > 5000) seenKeys = new Set(displayEvents.map(evKey));
+    firstLoad = false;
 }
 
 function renderUnbackedSections() {
@@ -268,6 +363,7 @@ document.addEventListener("DOMContentLoaded", async () => {
                 setBody("events-table", fullWidthRow("events-table", "이벤트가 없습니다.", "muted"));
                 if (window.renderButtCandidates) window.renderButtCandidates([]);
                 setBody("fire-origin-table", fullWidthRow("fire-origin-table", "현재 감지된 화재가 없습니다 (안전 상태).", "ok"));
+                setFireWhere([]);
             } catch (err) {
                 alert("삭제 중 서버 연결 오류: " + err.message);
             }
@@ -321,14 +417,15 @@ document.addEventListener("DOMContentLoaded", async () => {
             
             if (!exportData.length) return alert("저장할 이벤트 로그가 없습니다.");
             
-            let csv = "발생일시,장치ID,이벤트유형,위험도,상세내용\n";
+            let csv = "발생일시,장치ID,위치,이벤트유형,위험도,상세내용\n";
             exportData.forEach(e => {
                 const time = fmtTime(e.timestamp);
                 const dev = e.device_id || "";
+                const loc = String(deviceLocations[e.device_id] || "").replace(/,/g, " ");
                 const type = e.event_type || "";
                 const sev = SEVERITY_LABEL[e.severity] || e.severity || "";
                 const msg = (e.message || "").replace(/,/g, " "); // CSV 호환을 위해 쉼표 제거
-                csv += `${time},${dev},${type},${sev},${msg}\n`;
+                csv += `${time},${dev},${loc},${type},${sev},${msg}\n`;
             });
 
             const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
@@ -340,19 +437,46 @@ document.addEventListener("DOMContentLoaded", async () => {
         });
     }
 
+    // ---- 실시간 갱신 루프 ----
+    // - 이전 요청이 끝난 뒤에만 다음 요청 (요청이 겹쳐 쌓이지 않음)
+    // - 탭이 숨겨져 있으면 쉬고, 다시 보이면 즉시 갱신
+    // - 서버 오류 시 간격을 늘려 재시도 (최대 30초), 복구되면 원래 주기로
+    let inFlight = false, failCount = 0, liveTimer = null, liveGen = 0;
+
     const refreshData = async () => {
+        if (inFlight) return;
+        inFlight = true;
         try {
             const devices = await loadRealtime();
-            setApiStatus("online", `API 연결됨 · 장치 ${devices.length}대`);
+            setApiStatus("online", `API 연결됨 · 장치 ${devices.length}대 · 실시간 ${new Date().toLocaleTimeString("ko-KR")}`);
             await loadEvents(devices);
+            failCount = 0;
         } catch (err) {
-            setApiStatus("offline", "API 서버에 연결할 수 없습니다");
+            failCount++;
+            setApiStatus("offline", "API 서버에 연결할 수 없습니다 (자동 재시도 중)");
             renderRealtimeUnavailable(`서버에 연결할 수 없습니다: ${err.message}`);
+        } finally {
+            inFlight = false;
         }
     };
 
-    // 최초 1회 로드 (브라우저 새로고침[F5]을 누를 때마다 갱신됩니다)
-    await refreshData();
+    const startLoop = (immediate) => {
+        const gen = ++liveGen;               // 새 루프가 시작되면 이전 루프는 스스로 멈춘다
+        clearTimeout(liveTimer);
+        const tick = async () => {
+            if (gen !== liveGen) return;
+            if (!document.hidden) await refreshData();
+            if (gen !== liveGen) return;
+            const delay = Math.min(LIVE_MS * Math.pow(2, Math.min(failCount, 3)), 30000);
+            liveTimer = setTimeout(tick, delay);
+        };
+        liveTimer = setTimeout(tick, immediate ? 0 : LIVE_MS);
+    };
+
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) startLoop(true); });
+
+    await refreshData();   // 최초 1회 로드
+    startLoop(false);      // 이후 LIVE_MS 마다 자동 갱신 (F5 불필요)
 });
 
 // ==========================================
