@@ -17,6 +17,7 @@
             <a href="#pollution">오염도 현황</a>
                 <a href="#butt-candidates">꽁초 후보</a>
             <a href="#th">실시간 확산 경로</a>
+            <a href="#incident-history">알림 처리 이력</a> <!-- 💡 처리 이력 메뉴 추가 -->
             <a href="#events">이벤트 기록</a>
             <a href="#settings">설정</a>
         </nav>
@@ -78,7 +79,11 @@
         </section>
 
         <section id="pollution" class="panel">
-            <h2>오염도 현황 <span class="badge unbacked">미연동</span></h2>
+            <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
+                <h2 style="margin: 0;">오염도 현황 <span class="badge"></span></h2>
+            
+                <button id="btn-show-pollution-stats" style="padding: 6px 12px; cursor: pointer; background: #3b5998; color: white; border: none; border-radius: 4px; font-weight: bold;">📊 누적수치 보기</button>
+            </div>
             <p class="note">
                 ※ 오염도 점수는 현재 통신 규약(v0.1)에 정의되어 있지 않아 백엔드에서
                 제공되지 않습니다. 프로토콜 확장 후 연동 예정입니다.
@@ -174,6 +179,29 @@
     </div>
 </section>
 
+        <!-- 💡 [신규 추가] 알림 처리 이력 섹션 -->
+        <section id="incident-history" class="panel">
+    <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
+        <h2 style="margin: 0; color: #e67e22;">📝 알림 처리 이력 (진압 프로세스)</h2>
+        <!-- 💡 전체 삭제 버튼 추가 -->
+        <button onclick="clearAllIncidents()" style="padding: 6px 12px; cursor: pointer; background: #ff6b6b; color: white; border: none; border-radius: 4px; font-weight: bold;">🧹 전체 이력 지우기</button>
+    </div>
+    <table class="data-table" id="incident-table" style="margin-top: 15px;">
+        <thead>
+            <tr>
+                <th>발생 일시</th>
+                <th>장치 (위치)</th>
+                <th>화재 순간 캡처</th>
+                <th>상태</th>
+                <th>담당자</th>
+                <th>최근 처리 시각</th>
+                <th>작업</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+</section>
+
         <section id="events" class="panel">
     <!-- 제목과 버튼들을 나란히 배치하는 구역 -->
     <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
@@ -202,41 +230,62 @@
 </section>
 
         <section id="settings" class="panel">
-            <h2>설정</h2>
-            <div class="cards">
-                <div class="card info">
-                    <span class="label">서버 상태</span>
-                    <span class="value ok">정상</span>
-                </div>
-                <div class="card info">
-                    <span class="label">현재 모델 버전</span>
-                    <span class="value" id="setting-model-version">v0.1.0-dev</span>
-                </div>
-                <div class="card info">
-                    <span class="label">학습 파이프라인</span>
-                    <span class="value">대기 (placeholder)</span>
-                </div>
-                <div class="card info">
-                    <span class="label">규칙셋 배포</span>
-                    <span class="value">미배포 (placeholder)</span>
-                </div>
-            </div>
-            <p class="note">
-                ※ 실시간 CCTV 상태·이벤트 기록은 백엔드 API(<code id="setting-api-base">/</code>)에서
-                실시간으로 가져옵니다. 오염도·온습도는 아직 프로토콜에 정의되지 않아 미연동 상태입니다.
-            </p>
-        </section>
+    <h2>설정 및 시스템 정보</h2>
+    <div class="cards">
+        <div class="card info">
+            <span class="label">서버 상태</span>
+            <span class="value ok">정상 연결됨</span>
+        </div>
+        <div class="card info">
+            <span class="label">현재 모델 버전</span>
+            <span class="value" id="setting-model-version">yolov8-fire-v2</span>
+        </div>
+        <div class="card info">
+            <span class="label">AI 분석 엔진</span>
+            <span class="value ok">실시간 가동 중</span>
+        </div>
+        <div class="card info">
+            <span class="label">규칙셋 버전</span>
+            <span class="value">v1.0 (적용됨)</span>
+        </div>
+    </div>
+    <p class="note">
+        ※ 실시간 CCTV 상태·이벤트 기록은 백엔드 API(<code id="setting-api-base">/</code>)에서 연동되어 처리됩니다.
+    </p>
+</section>
     </main>
 
     <footer class="bottombar">
         <small>CCTV 기반 환경 적응형 통합 관제 시스템</small>
     </footer>
 
+    <!-- 💡 오염도 통계 모달창 (HTML 최하단 추가) -->
+    <div id="stats-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 9999; justify-content: center; align-items: center;">
+        <div style="background: #fff; padding: 20px; border-radius: 8px; width: 800px; max-width: 95%; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
+            <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
+                <h3 style="margin: 0; color: #333;">📈 장치별 오염도 누적 추이</h3>
+                <button onclick="document.getElementById('stats-modal').style.display='none'" style="cursor: pointer; border: none; background: transparent; font-size: 20px; font-weight: bold;">✖</button>
+            </div>
+            <div style="margin-bottom: 15px; display: flex; gap: 10px;">
+                <select id="stats-device-select" style="padding: 5px; border-radius: 4px;"></select>
+                <select id="stats-view-select" style="padding: 5px; border-radius: 4px;">
+                    <option value="daily">오늘 (시간대별)</option>
+                    <option value="monthly">이번 달 (일자별)</option>
+                    <option value="yearly">올해 (월별)</option>
+                </select>
+            </div>
+            <div style="position: relative; height: 300px; width: 100%;">
+                <canvas id="pollutionChart"></canvas>
+            </div>
+        </div>
+    </div>
+
     <!-- API base URL. Override by editing this value (or set window.API_BASE
          before script.js loads) for non-localhost deployments. -->
     <script>
         window.API_BASE = window.API_BASE || "http://localhost:8000";
     </script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="butt_candidates.js"></script>
     <script src="script.js"></script>
 </body>

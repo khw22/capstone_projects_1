@@ -1,0 +1,11 @@
+[
+  {
+    "id": "inc_88d0c074",
+    "device_id": "CCTV-03",
+    "status": "발생",
+    "assignee": "",
+    "created_at": "2026-11-04T14:46:58Z",
+    "updated_at": "2026-11-04T14:46:58Z",
+    "snapshot_url": "/api/snapshots/fire_81f776"
+  }
+]

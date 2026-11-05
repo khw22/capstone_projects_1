@@ -249,7 +249,7 @@ def mine(a):
     person_model = load_person_detector(a) if a.exclude_person else None
     person_boxes, proc_n = [], 0
     ignore_regions = [tuple(int(v) for v in r.split(",")) for r in (a.ignore_region or [])]
-    keep_mask = None
+    keep_mask = near_mask = None
 
     while True:
         ok, frame = cap.read()
@@ -297,6 +297,9 @@ def mine(a):
                 keep_mask = np.full(diff.shape, 255, np.uint8)
                 for rx, ry, rw, rh in ignore_regions:
                     keep_mask[ry:ry + rh, rx:rx + rw] = 0
+                if a.ignore_margin > 0:                      # 제외 영역 바깥 가장자리에 남는 조각 후보를 막는다
+                    m = int(a.ignore_margin)
+                    near_mask = cv2.dilate(cv2.bitwise_not(keep_mask), np.ones((2 * m + 1, 2 * m + 1), np.uint8))
             diff = cv2.bitwise_and(diff, keep_mask)
         contours, _ = cv2.findContours(diff, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -304,6 +307,8 @@ def mine(a):
         for c in contours:
             x, y, w, h = cv2.boundingRect(c)
             if not (a.min_area <= w * h <= a.max_area):
+                continue
+            if near_mask is not None and near_mask[min(y + h // 2, near_mask.shape[0] - 1), min(x + w // 2, near_mask.shape[1] - 1)]:
                 continue
             if a.neighbor_ratio > 0 and neighbor_density(diff, (x, y, w, h)) > a.neighbor_ratio:
                 rejected.append((x, y, w, h))    # 큰 물체(사람 등)의 일부로 판단 -> 제외
@@ -502,6 +507,7 @@ def main():
                    help="분석 제외 영역 (여러 번 지정 가능)")
     m.add_argument("--dedupe-px", type=float, default=0, help="N>0 이면 이 거리(px) 안에 이미 저장한 후보가 있을 때 다시 저장하지 않음 (중복 감소)")
     m.add_argument("--dedupe-sec", type=float, default=1e9, help="--dedupe-px 중복 판정을 적용할 시간 범위(초, 기본 영상 전체)")
+    m.add_argument("--ignore-margin", type=int, default=0, help="제외 영역 바깥 N px 이내에 중심이 있는 후보도 제외(자동 온보딩이 쓰며, 경계에 남는 조각 방지)")
     m.add_argument("--stabilize", action="store_true", help="카메라의 작은 흔들림을 첫 프레임 기준으로 보정 (바람 등)")
     m.add_argument("--stabilize-max-shift", type=float, default=40, help="이보다 크게 이동하면 보정하지 않음(px)")
     m.add_argument("--config", default=None, help="카메라별 설정 JSON (옵션 이름의 '-'를 '_'로 쓴 키). 명령줄 옵션이 우선")

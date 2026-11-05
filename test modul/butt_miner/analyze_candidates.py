@@ -24,7 +24,7 @@ def main():
 
     rows = []
     for d in sorted(Path(a.candidates).glob("ID*/meta.json")):
-        m = json.loads(d.read_text(encoding="utf-8"))
+        m = json.loads(d.read_text(encoding="utf-8", errors="ignore"))
         x, y, w, h = m["bbox_xywh"]
         rows.append({"id": d.parent.name, "x": x, "y": y, "w": w, "h": h, "area": w * h,
                      "t": m.get("detected_at_sec", 0), "res": m.get("resolution", [0, 0])})

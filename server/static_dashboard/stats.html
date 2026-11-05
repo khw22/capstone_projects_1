@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>오염도 누적 통계</title>
+    <style>
+        body { font-family: 'Malgun Gothic', '맑은 고딕', sans-serif; background: #f8fafd; padding: 30px; margin: 0; }
+        .container { background: #fff; padding: 25px 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); max-width: 900px; margin: 0 auto; }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #eef2f6; padding-bottom: 15px; margin-bottom: 25px; }
+        h2 { margin: 0; color: #1f2a3a; font-size: 22px; }
+        .controls { display: flex; gap: 10px; align-items: center; }
+        select, input[type="date"] { padding: 8px 12px; border-radius: 6px; border: 1px solid #dbe4f0; font-size: 14px; background: #f4f7fa; color: #333; outline: none; cursor: pointer; }
+        .chart-container { position: relative; height: 450px; width: 100%; }
+        
+        .month-year-picker { display: flex; gap: 5px; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h2>📈 장치별 오염도 누적 추이</h2>
+            <div class="controls">
+                <select id="stats-device-select"></select>
+                
+                <select id="stats-view-select">
+                    <option value="daily">일간 (시간대별)</option>
+                    <option value="monthly">월간 (일자별)</option>
+                    <option value="yearly">연간 (월별)</option>
+                </select>
+
+                <div id="date-picker-container">
+                    <input type="date" id="date-select-daily" style="display: none;">
+                    
+                    <div id="date-select-monthly" class="month-year-picker" style="display: none;">
+                        <select id="sel-year-m"></select>년
+                        <select id="sel-month-m"></select>월
+                    </div>
+
+                    <div id="date-select-yearly" class="month-year-picker" style="display: none;">
+                        <select id="sel-year-y"></select>년
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="chart-container">
+            <canvas id="pollutionChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin.includes("localhost") || window.location.origin.includes("127.0.0.1") 
+                         ? "http://localhost:8000" 
+                         : window.location.origin;
+
+        let pollChart = null;
+
+        const urlParams = new URLSearchParams(window.location.search);
+        const devicesString = urlParams.get('devices');
+        if (devicesString) {
+            const devices = devicesString.split(",");
+            const selectEl = document.getElementById("stats-device-select");
+            selectEl.innerHTML = devices.map(id => `<option value="${id}">${id}</option>`).join("");
+        }
+
+        const now = new Date();
+        const curYear = now.getFullYear();
+        const curMonth = now.getMonth() + 1;
+        const curDate = now.getDate();
+
+        const dateInput = document.getElementById("date-select-daily");
+        dateInput.value = `${curYear}-${String(curMonth).padStart(2, '0')}-${String(curDate).padStart(2, '0')}`;
+
+        const yearM = document.getElementById("sel-year-m");
+        const monthM = document.getElementById("sel-month-m");
+        const yearY = document.getElementById("sel-year-y");
+
+        let yearOpts = "";
+        for(let y = curYear - 5; y <= curYear + 1; y++) {
+            yearOpts += `<option value="${y}">${y}</option>`;
+        }
+        yearM.innerHTML = yearOpts;
+        yearY.innerHTML = yearOpts;
+        yearM.value = curYear;
+        yearY.value = curYear;
+
+        let monthOpts = "";
+        for(let m = 1; m <= 12; m++) {
+            monthOpts += `<option value="${String(m).padStart(2, '0')}">${String(m).padStart(2, '0')}</option>`;
+        }
+        monthM.innerHTML = monthOpts;
+        monthM.value = String(curMonth).padStart(2, '0');
+
+        const viewSelect = document.getElementById("stats-view-select");
+        function updateUI() {
+            const mode = viewSelect.value;
+            document.getElementById("date-select-daily").style.display = (mode === "daily") ? "block" : "none";
+            document.getElementById("date-select-monthly").style.display = (mode === "monthly") ? "flex" : "none";
+            document.getElementById("date-select-yearly").style.display = (mode === "yearly") ? "flex" : "none";
+            renderStatsChart();
+        }
+
+        // 날짜 오프셋 문자열 생성 헬퍼
+        function getDateStr(baseDateStr, dayOffset) {
+            const d = new Date(baseDateStr);
+            d.setDate(d.getDate() + dayOffset);
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${y}-${m}-${day}`;
+        }
+
+        async function renderStatsChart() {
+            const canvas = document.getElementById('pollutionChart');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            const viewMode = viewSelect.value;
+            const deviceId = document.getElementById("stats-device-select").value;
+
+            let statsData = { daily: {}, monthly: {}, yearly: {} };
+            try {
+                const res = await fetch(API_BASE + '/api/stats/pollution');
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.stats && data.stats[deviceId]) {
+                        statsData = data.stats[deviceId];
+                    }
+                }
+            } catch(e) { console.error("통계 데이터 로드 실패", e); }
+
+            let labels = [];
+            let dataset = [];
+            let titleText = "";
+
+            if (viewMode === "daily") {
+                const targetDate = document.getElementById("date-select-daily").value; // KST 기준 날짜 (YYYY-MM-DD)
+                titleText = `${targetDate} 시간대별 누적 점수 (KST)`;
+                
+                const prevDateStr = getDateStr(targetDate, -1);
+                const dayStatsCurrent = (statsData.daily && statsData.daily[targetDate]) ? statsData.daily[targetDate] : {};
+                const dayStatsPrev = (statsData.daily && statsData.daily[prevDateStr]) ? statsData.daily[prevDateStr] : {};
+
+                // KST 0시부터 23시까지 순회하며 UTC 기준으로 저장된 데이터 매핑
+                for (let i = 0; i < 24; i++) {
+                    const hourStr = String(i).padStart(2, '0');
+                    labels.push(hourStr + "시");
+                    
+                    let score = 0;
+                    if (i < 9) {
+                        // KST 00~08시는 전날 UTC 15~23시에 해당
+                        const utcHour = i + 15;
+                        const utcHourStr = String(utcHour).padStart(2, '0');
+                        score = (dayStatsPrev[utcHourStr] || 0);
+                    } else {
+                        // KST 09~23시는 당일 UTC 00~14시에 해당
+                        const utcHour = i - 9;
+                        const utcHourStr = String(utcHour).padStart(2, '0');
+                        score = (dayStatsCurrent[utcHourStr] || 0);
+                    }
+                    dataset.push(score);
+                }
+            } else if (viewMode === "monthly") {
+                const y = yearM.value;
+                const m = monthM.value;
+                const targetMonth = `${y}-${m}`;
+                titleText = `${y}년 ${m}월 일자별 누적 점수 (KST)`;
+                
+                const daysInMonth = new Date(Number(y), Number(m), 0).getDate();
+                for (let i = 1; i <= daysInMonth; i++) {
+                    const kstDateStr = `${targetMonth}-${String(i).padStart(2, '0')}`;
+                    labels.push(i + "일");
+                    
+                    let total = 0;
+                    for (let kstHour = 0; kstHour < 24; kstHour++) {
+                        let dStr = kstDateStr;
+                        let utcHour = 0;
+                        if (kstHour < 9) {
+                            dStr = getDateStr(kstDateStr, -1);
+                            utcHour = kstHour + 15;
+                        } else {
+                            dStr = kstDateStr;
+                            utcHour = kstHour - 9;
+                        }
+                        const dayTally = (statsData.daily && statsData.daily[dStr]) ? statsData.daily[dStr] : {};
+                        const utcHourStr = String(utcHour).padStart(2, '0');
+                        total += (dayTally[utcHourStr] || 0);
+                    }
+                    dataset.push(total);
+                }
+            } else if (viewMode === "yearly") {
+                const y = yearY.value;
+                titleText = `${y}년 월별 누적 점수 (KST)`;
+                for (let monthIdx = 1; monthIdx <= 12; monthIdx++) {
+                    const mStr = String(monthIdx).padStart(2, '0');
+                    labels.push(monthIdx + "월");
+                    
+                    const daysInThisMonth = new Date(Number(y), monthIdx, 0).getDate();
+                    let monthTotal = 0;
+                    for (let dayIdx = 1; dayIdx <= daysInThisMonth; dayIdx++) {
+                        const kstDateStr = `${y}-${mStr}-${String(dayIdx).padStart(2, '0')}`;
+                        for (let kstHour = 0; kstHour < 24; kstHour++) {
+                            let dStr = kstDateStr;
+                            let utcHour = 0;
+                            if (kstHour < 9) {
+                                dStr = getDateStr(kstDateStr, -1);
+                                utcHour = kstHour + 15;
+                            } else {
+                                dStr = kstDateStr;
+                                utcHour = kstHour - 9;
+                            }
+                            const dayTally = (statsData.daily && statsData.daily[dStr]) ? statsData.daily[dStr] : {};
+                            const utcHourStr = String(utcHour).padStart(2, '0');
+                            monthTotal += (dayTally[utcHourStr] || 0);
+                        }
+                    }
+                    dataset.push(monthTotal);
+                }
+            }
+
+            if (pollChart) pollChart.destroy();
+            
+            pollChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: '누적 오염도 점수',
+                        data: dataset,
+                        backgroundColor: 'rgba(59, 89, 152, 0.7)', 
+                        borderColor: 'rgba(59, 89, 152, 1)',
+                        borderWidth: 1,
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        title: { display: true, text: titleText, font: {size: 18, color: '#1f2a3a'} }
+                    },
+                    scales: {
+                        y: { beginAtZero: true, ticks: { stepSize: 1, color: '#6b7a90' } },
+                        x: { ticks: { color: '#6b7a90' } }
+                    }
+                }
+            });
+        }
+
+        viewSelect.addEventListener("change", updateUI);
+        document.getElementById("stats-device-select").addEventListener("change", renderStatsChart);
+        document.getElementById("date-select-daily").addEventListener("change", renderStatsChart);
+        yearM.addEventListener("change", renderStatsChart);
+        monthM.addEventListener("change", renderStatsChart);
+        yearY.addEventListener("change", renderStatsChart);
+
+        updateUI();
+    </script>
+</body>
+</html>

@@ -12,14 +12,15 @@
       "name": "안양대 정문",
       "lat": 37.3920,
       "lng": 126.9215,
-      "video": "야간 화재2.mp4"
+      "video": "trash video/trash video1.mp4"
     },
     {
       "id": "CCTV-03",
       "name": "안양대 후문",
       "lat": 37.3892,
       "lng": 126.9195,
-      "video": "야간화재1.mp4"
+      "video": "trash video/trash video2.mp4"
+
     }
   ]
 }

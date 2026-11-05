@@ -176,7 +176,13 @@ function renderRealtimeUnavailable(message) {
 
 async function loadRealtime() {
     const data = await apiGet("/api/devices");
-    const devices = (data && data.devices) || [];
+    // 💡 local-ai-server나 local ai server가 포함된 항목을 목록에서 제외합니다.
+    const rawDevices = (data && data.devices) || [];
+    const devices = rawDevices.filter(d => {
+        const id = (d.device_id || "").toLowerCase();
+        return !id.includes("local-ai-server") && !id.includes("local ai server");
+    });
+
     renderCctvTable(devices);
     renderStatCards(devices);
     return devices;
@@ -333,6 +339,81 @@ async function loadEvents(devices) {
     firstLoad = false;
 }
 
+// 💡 알림 처리 이력 (Incidents) 로드 함수
+async function loadIncidents() {
+    try {
+        const data = await apiGet("/api/incidents");
+        const incs = data.incidents || [];
+        if (!incs.length) {
+            setBodyLive("incident-table", fullWidthRow("incident-table", "현재 진행 중인 화재 처리 이력이 없습니다.", "muted"));
+            return;
+        }
+        
+        setBodyLive("incident-table", incs.map(i => {
+            const statusClass = i.status === '발생' ? 'bad' : i.status === '확인중' ? 'warn' : 'ok';
+            const btn1 = i.status === '발생' ? `<button onclick="updateIncident('${i.id}', '확인중')" style="padding:4px 8px; background:#f39c12; border:none; color:white; border-radius:4px; cursor:pointer; margin-right:4px;">👀 확인 중</button>` : '';
+            const btn2 = i.status === '확인중' ? `<button onclick="updateIncident('${i.id}', '조치완료')" style="padding:4px 8px; background:#27ae60; border:none; color:white; border-radius:4px; cursor:pointer; margin-right:4px;">✅ 조치 완료</button>` : '';
+            
+            // 💡 개별 삭제 버튼 추가
+            const deleteBtn = `<button onclick="deleteIncident('${i.id}')" style="padding:4px 8px; background:#e74c3c; border:none; color:white; border-radius:4px; cursor:pointer;">🗑️ 삭제</button>`;
+            
+            return `
+            <tr>
+                <td>${fmtTime(i.created_at)}</td>
+                <td>${devLabel(i.device_id)}</td>
+                <td><a href="${i.snapshot_url}" target="_blank"><img src="${i.snapshot_url}" style="height: 40px; border-radius: 4px; border:1px solid #ccc;"></a></td>
+                <td><span class="badge ${statusClass}">${i.status}</span></td>
+                <td>${show(i.assignee)}</td>
+                <td>${fmtTime(i.updated_at)}</td>
+                <td>${btn1} ${btn2} ${deleteBtn}</td>
+            </tr>`;
+        }).join(""));
+    } catch (e) {
+        console.error("이력 로드 실패:", e);
+    }
+}
+
+window.updateIncident = async function(id, status) {
+    const assignee = prompt("담당자 이름을 입력하세요 (선택사항):", "");
+    if (assignee === null) return; 
+    await fetch(`${API_BASE}/api/incidents/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: status, assignee: assignee })
+    });
+    loadIncidents(); 
+};
+
+// 💡 개별 삭제 실행 함수
+window.deleteIncident = async function(id) {
+    if (!confirm("이 처리 이력을 삭제하시겠습니까?")) return;
+    try {
+        const res = await fetch(`${API_BASE}/api/incidents/${id}`, { method: 'DELETE' });
+        if (res.ok) {
+            loadIncidents();
+        } else {
+            alert("삭제에 실패했습니다.");
+        }
+    } catch (err) {
+        alert("서버 통신 오류: " + err.message);
+    }
+};
+
+// 💡 전체 삭제 실행 함수
+window.clearAllIncidents = async function() {
+    if (!confirm("모든 알림 처리 이력을 영구적으로 삭제하시겠습니까?")) return;
+    try {
+        const res = await fetch(`${API_BASE}/api/incidents`, { method: 'DELETE' });
+        if (res.ok) {
+            loadIncidents();
+        } else {
+            alert("전체 삭제에 실패했습니다.");
+        }
+    } catch (err) {
+        alert("서버 통신 오류: " + err.message);
+    }
+};
+
 function renderUnbackedSections() {
     setBody("pollution-table", fullWidthRow("pollution-table", "AI 오염도(쓰레기/꽁초) 탐지 모델 적용 대기 중입니다.", "muted"));
     setBody("fire-origin-table", fullWidthRow("fire-origin-table", "현재 감지된 화재가 없습니다 (안전 상태).", "ok")); 
@@ -450,6 +531,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             const devices = await loadRealtime();
             setApiStatus("online", `API 연결됨 · 장치 ${devices.length}대 · 실시간 ${new Date().toLocaleTimeString("ko-KR")}`);
             await loadEvents(devices);
+            await loadIncidents(); // 💡 이력 통신 추가
             failCount = 0;
         } catch (err) {
             failCount++;

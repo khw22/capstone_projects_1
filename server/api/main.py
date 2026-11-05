@@ -4,8 +4,6 @@ Run from the repo root:
     uvicorn server.api.main:app --reload --port 8000
     C:/Users/HP/Desktop/raspi-cctv-project/venv/Scripts/Activate.ps1
 
-cd C:/Users/HP/Desktop/capstone_project/test modul/butt_miner
-python run_pipeline.py --video ../../영상파일이름.mp4 --out runs/demo --preset both --server http://localhost:8000
 
 Environment variables:
     CCTV_REQUIRE_AUTH=1   -> enable X-Device-Api-Key check on ingest endpoints (default: off)
@@ -21,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import subprocess
+import sys
 import cv2
 import requests  # 💡 텔레그램 API 통신용 패키지 (pip install requests)
 from fastapi import (
@@ -38,8 +38,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel # 💡 알림 처리 이력을 위한 BaseModel 추가
 
-from . import storage
+from . import storage, incidents # 💡 incidents 모듈 추가
 from .auth import require_api_key
 from .models import (
     DetectionsIn,
@@ -49,6 +50,17 @@ from .models import (
 )
 
 app = FastAPI(title="raspi-cctv central server", version="0.1.0")
+
+# --- 💡 알림 처리 이력 업데이트 모델 추가 ---
+class IncidentUpdate(BaseModel):
+    status: Optional[str] = None
+    assignee: Optional[str] = None
+
+# --- 💡 통계 누적 업데이트 모델 추가 ---
+class StatUpdateIn(BaseModel):
+    device_id: str
+    timestamp: str  # 이벤트 시각
+    score_diff: int # 추가되거나 깎일 점수
 
 # Static dashboard runs on a different origin (http://localhost:8000) during dev.
 app.add_middleware(
@@ -75,7 +87,7 @@ _tg_warned = False
 _last_tg_alert = {}  # 카메라별 연속 알림 스팸 방지용 타임스탬프
 
 def send_telegram_fire_alert(device_id: str, frame) -> None:
-    """화재 최초 감지 시 메모리에서 즉시 캡처하여 텔레그램으로 사진과 알림을 전송합니다."""
+    """화재 최초 감지 시 메모리에서 즉시 캡처하여 텔레그램으로 사진과 CCTV 이름, 실제 주소를 포함한 알림을 전송합니다."""
     global _tg_warned
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         if not _tg_warned:
@@ -89,15 +101,35 @@ def send_telegram_fire_alert(device_id: str, frame) -> None:
     _last_tg_alert[device_id] = now
     
     try:
+        # 💡 1. cameras.json에 등록된 카메라 정보(이름) 가져오기
+        cam_info = _CAMERAS.get(device_id, {})
+        cam_name = cam_info.get("name", "")
+        
+        # 💡 2. CCTV ID와 이름을 보기 쉽게 조합
+        location_display = f"{device_id}"
+        if cam_name:
+            location_display += f" ({cam_name})"
+            
+        # 💡 3. 실제 주소 설정 (cameras.json 등록 이름 또는 좌표 기반 주소 매핑)
+        # map.html과 동일하게 각 CCTV 이름별 실제 주소를 매칭합니다.
+        address_str = "경기도 안양시 만안구 삼덕로37번길 22 (안양대학교)"
+        if cam_name == "안양대 정문":
+            address_str = "경기도 안양시 만안구 안양로 229 (안양대학교 정문)"
+        elif cam_name == "안양대 후문":
+            address_str = "경기도 안양시 만안구 삼덕로 50 (안양대학교 후문 주차장)"
+
         # 하드디스크 저장 과정 없이 메모리 상에서 바로 JPG 인코딩 (스트림 딜레이 방지)
         ret, buffer = cv2.imencode(".jpg", frame)
         if not ret:
             return
         
         time_str = time.strftime("%Y-%m-%d %H:%M:%S")
+        
+        # 💡 4. 텔레그램 메시지 포맷에 CCTV 이름과 실제 주소 반영
         caption = (
             f"🔥 [긴급] 화재 감지 알림!\n\n"
-            f"📍 위치: {device_id}\n"
+            f"📹 CCTV: {location_display}\n"
+            f"📍 실제주소: {address_str}\n"
             f"⏰ 일시: {time_str}\n\n"
             f"※ 즉시 관제 화면을 확인하세요!"
         )
@@ -111,12 +143,13 @@ def send_telegram_fire_alert(device_id: str, frame) -> None:
             timeout=5
         )
         if resp.ok:
-            print(f"[stream] 📱 [{device_id}] 텔레그램 화재 사진 전송 완료!")
+            print(f"[stream] 📱 [{device_id}] 텔레그램 화재 사진 및 주소 전송 완료!")
         else:  # 토큰/채팅 ID 오류 등은 예외가 아니라 HTTP 오류 코드로 오므로 직접 확인
             print(f"[stream] ❌ 텔레그램 전송 실패: HTTP {resp.status_code} {resp.text[:150]}")
     except Exception as e:
         # 오류 문구에 토큰이 들어간 주소가 섞여 나올 수 있어 가려서 출력
         print(f"[stream] ❌ 텔레그램 전송 실패: {str(e).replace(TELEGRAM_BOT_TOKEN, '***')}")
+
 
 # --- AI 모델 (서버 시작 시 백그라운드에서 1회 로드) ---
 FIRE_MODEL_PATH = Path(os.getenv("CCTV_FIRE_MODEL", str(_REPO_ROOT / "fire.pt")))
@@ -789,6 +822,21 @@ def stream_video(filename: Optional[str] = None, camera: Optional[str] = None, l
                             event_active = True
                             last_size, last_x, last_y = size, cx, cy
                             
+                            # 💡 [추가] 현재 프레임을 그 자리에서 즉시 jpg로 변환하여 안전하게 저장 및 이력 생성
+                            ret, fire_buffer = cv2.imencode(".jpg", frame)
+                            if ret:
+                                fire_jpeg = fire_buffer.tobytes()
+                                snap_id = f"fire_{uuid.uuid4().hex[:6]}"
+                                with _storage_lock:
+                                    storage.store_snapshot(
+                                        device_id=device_id, 
+                                        snapshot_id=snap_id, 
+                                        data=fire_jpeg, 
+                                        metadata={"reason": "fire_initial"}, 
+                                        content_type="image/jpeg"
+                                    )
+                                incidents.create_incident(device_id, f"/api/snapshots/{snap_id}")
+
                             # 💡 화재 최초 발생 순간, 텔레그램 스레드를 비동기로 실행하여 사진 전송
                             threading.Thread(
                                 target=send_telegram_fire_alert, 
@@ -874,6 +922,102 @@ def stream_video(filename: Optional[str] = None, camera: Optional[str] = None, l
         generate_frames(),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
+
+# --- 💡 알림 처리 이력 (Incidents) API ---
+@app.get("/api/incidents")
+async def get_incidents_api():
+    return {"incidents": incidents.get_incidents()}
+
+@app.patch("/api/incidents/{incident_id}")
+async def update_incident_api(incident_id: str, body: IncidentUpdate):
+    res = incidents.update_incident(incident_id, body.status, body.assignee)
+    if not res:
+        raise HTTPException(404, detail="Incident not found")
+    return {"ok": True, "incident": res}
+
+# --- 💡 알림 처리 이력 (Incidents) 삭제 API 추가 ---
+@app.delete("/api/incidents/{incident_id}")
+async def delete_incident_api(incident_id: str):
+    success = incidents.delete_incident(incident_id)
+    if not success:
+        raise HTTPException(404, detail="Incident not found")
+    return {"ok": True}
+
+@app.delete("/api/incidents")
+async def clear_all_incidents_api():
+    incidents.clear_all_incidents()
+    return {"ok": True}
+
+@app.get("/api/devices/{device_id}/run-litter")
+def trigger_litter_pipeline(device_id: str):
+    """스트리밍에 영향을 주지 않고 백그라운드에서 완전히 독립적으로 쓰레기 분석을 실행합니다."""
+    cam = _CAMERAS.get(device_id)
+    if not cam or not cam.get("video"):
+        return {"ok": False, "message": "카메라 영상을 찾을 수 없습니다."}
+        
+    video_path = str(_resolve_video(cam["video"]))
+    out_dir = str(_REPO_ROOT / "runs" / f"litter_{device_id}")
+    
+    # 명령어 구성
+    # 명령어 구성
+    cmd = [
+        sys.executable, str(_REPO_ROOT / "test modul" / "butt_miner" / "run_pipeline.py"),
+        "--video", video_path,
+        "--out", out_dir,
+        "--preset", "litter",
+        "--server", "http://localhost:8000",  # 💡 대시보드로 사진을 전송하는 옵션 추가
+        "--device-id", device_id              # 💡 어느 카메라 영상인지 인식하도록 추가
+    ]
+    
+    # Popen을 사용하면 서버가 끝날 때까지 기다리지 않고 백그라운드에서 던져놓고 바로 돌아옵니다.
+    subprocess.Popen(cmd)
+    
+    print(f"[Litter] 🗑️ {device_id} 구역의 쓰레기 분석을 백그라운드에서 시작했습니다.")
+    return {"ok": True, "message": "분석 시작됨"}
+
+
+# --- 💡 영구 보존용 오염도 통계 누적 API ---
+STATS_FILE = _REPO_ROOT / "pollution_stats.json"
+
+def _load_stats():
+    if STATS_FILE.is_file():
+        try:
+            return json.loads(STATS_FILE.read_text(encoding="utf-8"))
+        except:
+            pass
+    return {}
+
+def _save_stats(data):
+    STATS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+@app.post("/api/stats/pollution")
+def update_pollution_stat(body: StatUpdateIn):
+    """사용자가 꽁초/쓰레기를 검수(확정)할 때마다 점수를 연/월/일 단위로 누적합니다."""
+    stats = _load_stats()
+    dt = datetime.fromisoformat(body.timestamp.replace("Z", "+00:00"))
+    y, m, d, h = dt.strftime("%Y"), dt.strftime("%Y-%m"), dt.strftime("%Y-%m-%d"), dt.strftime("%H")
+    
+    if body.device_id not in stats:
+        stats[body.device_id] = {"yearly": {}, "monthly": {}, "daily": {}}
+    
+    ds = stats[body.device_id]
+    ds["yearly"].setdefault(y, 0)
+    ds["monthly"].setdefault(m, 0)
+    ds["daily"].setdefault(d, {})
+    ds["daily"][d].setdefault(h, 0)
+    
+    # 점수 누적 (삭제 시 마이너스 점수가 올 수 있으므로 반영하되 0 이하로는 안 내려가게 방어)
+    ds["yearly"][y] = max(0, ds["yearly"][y] + body.score_diff)
+    ds["monthly"][m] = max(0, ds["monthly"][m] + body.score_diff)
+    ds["daily"][d][h] = max(0, ds["daily"][d][h] + body.score_diff)
+    
+    _save_stats(stats)
+    return {"ok": True}
+
+@app.get("/api/stats/pollution")
+def get_pollution_stats():
+    """그래프를 그리기 위해 전체 누적 통계를 가져옵니다."""
+    return {"ok": True, "stats": _load_stats()}
 
 
 # --- Static dashboard ---

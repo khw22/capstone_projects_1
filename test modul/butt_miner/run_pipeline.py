@@ -62,6 +62,8 @@ def main():
     p.add_argument("--ignore-region", action="append", default=[], metavar="x,y,w,h")
     p.add_argument("--stabilize", choices=["auto", "on", "off"], default="auto")
     p.add_argument("--debug-video", action="store_true", help="debug.mp4 저장(느려짐)")
+    p.add_argument("--verify-end", action="store_true", help="후보마다 '영상 끝 장면에도 배경과 달라져 있는 정도(end_support)'를 계산해 meta.json 에 기록(이 데이터는 투기물이 끝까지 남음)")
+    p.add_argument("--onboard-sec", type=float, default=0, help="N초 > 0 이면 자동 온보딩: 영상 앞 N초(쓰레기 없는 구간)에서 흔들리는 구역을 학습해 제외 영역을 자동 추가")
     p.add_argument("--no-analyze", action="store_true")
     p.add_argument("--server", default="")
     p.add_argument("--device-id", default="local-ai-server")
@@ -111,6 +113,20 @@ def main():
     if not cfg.get("stabilize"):
         cfg.pop("stabilize", None)
 
+    onb_info = None
+    if a.onboard_sec > 0:
+        import auto_onboard
+        res = auto_onboard.learn(a.video, a.onboard_sec)
+        if res is None:
+            print("[3/4] 자동 온보딩: 앞부분 프레임이 부족해 건너뜀")
+        else:
+            cv2.imwrite(str(out / "onboarding.jpg"), auto_onboard.draw(res), [cv2.IMWRITE_JPEG_QUALITY, 90])
+            cfg["ignore_region"] = list(cfg.get("ignore_region", [])) + res["ignore_region"]
+            if res["ignore_region"]:
+                cfg.setdefault("ignore_margin", 30)
+            onb_info = {"sec": res["sec_used"], "zones": len(res["ignore_region"]), "ignored_fraction": res["ignored_fraction"],
+                        "noise_floor": res["noise_floor"], "threshold": res["threshold"]}
+            print(f"      자동 온보딩: 앞 {res['sec_used']}초로 제외 영역 {onb_info['zones']}개(화면의 {res['ignored_fraction'] * 100:.1f}%) 추가 -> {out / 'onboarding.jpg'}")
     cfg_path = out / "pipeline_config.json"
     cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"      사용 설정 저장: {cfg_path}")
@@ -128,6 +144,29 @@ def main():
     speed = f"영상 {length:.0f}초를 {elapsed:.0f}초에 처리 (실시간의 {length / elapsed:.1f}배)" if elapsed > 0 and length else f"{elapsed:.0f}초"
     print(f"\n      후보 {n}개, {speed}")
 
+    verify_info = None
+    if a.verify_end and n:
+        import gt_tools
+        em = gt_tools.end_mask(a.video)
+        if em is None:
+            print("      끝 장면 확인: 프레임이 부족해 건너뜀")
+        else:
+            mk = em["mask"]
+            sups = []
+            for mp in sorted((out / "candidates").glob("ID*/meta.json")):
+                try:
+                    mj = json.loads(mp.read_text(encoding="utf-8"))
+                    x, y, w_, h_ = mj["bbox_xywh"]
+                    x, y = max(0, x), max(0, y)
+                    reg = mk[y:y + h_, x:x + w_]
+                    mj["end_support"] = round(float((reg > 0).mean()) if reg.size else 0.0, 3)
+                    mp.write_text(json.dumps(mj, ensure_ascii=False, indent=2), encoding="utf-8")
+                    sups.append(mj["end_support"])
+                except Exception:
+                    pass
+            if sups:
+                verify_info = {"n": len(sups), "ge_0.3": sum(1 for v in sups if v >= 0.3)}
+                print(f"      끝 장면 확인: 후보 {len(sups)}개 중 end_support 0.3 이상 {verify_info['ge_0.3']}개")
     # 5) 요약과 업로드
     if n and not a.no_analyze:
         run([sys.executable, HERE / "analyze_candidates.py", "--candidates", out / "candidates", "--top-large", 5])
@@ -138,7 +177,7 @@ def main():
                         "--device-id", a.device_id, "--video-name", Path(a.video).name]) == 0
 
     summary = {"video": a.video, "length_sec": round(length, 1), "preset": a.preset, "config": cfg, "shake": shake,
-               "candidates": n, "elapsed_sec": round(elapsed, 1),
+               "onboarding": onb_info, "verify_end": verify_info, "candidates": n, "elapsed_sec": round(elapsed, 1),
                "realtime_factor": round(length / elapsed, 2) if elapsed > 0 and length else None, "uploaded": uploaded}
     (out / "pipeline_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n요약 저장: {out / 'pipeline_summary.json'}")

@@ -1,0 +1,36 @@
+"""
+# 1) 모듈 폴더로 이동
+cd C:/Users/HP/Desktop/capstone_project/test modul/butt_miner
+파이프라인 실행 (후보 추출)
+python run_pipeline.py --video "../../trash video/trash video1.mp4" --out runs/demo --preset both --server http://localhost:8000 --ignore-region 0,0,720,110
+내 컴퓨터 다운로드
+python pull_reviews.py --server http://localhost:8000
+python butt_miner.py export --reviewed reviewed --dataset datasets/butt --prefix trash_demo
+
+② 후보 추출 결과 확인
+Get-ChildItem runs/demo/candidates
+③ 장면 사진 및 GIF 생성 (make_scene.py)
+python make_scene.py --candidates runs/demo/candidates --dir runs/demo --min-area 500 --gif
+④ 업로드 사전 점검 (--dry-run)
+python upload_candidates.py --candidates runs/demo/candidates --device-id CCTV-02 --dry-run
+⑤ CCTV-02로 최종 데이터 업로드
+python upload_candidates.py --candidates runs/demo/candidates --device-id CCTV-02
+
+3. 단독 쓰레기 탐지 및 실시간 오염도 측정 (detect_litter.py)
+# 모듈 폴더 위치에서 실행
+python detect_litter.py --model yolov8n.pt --source ../../fire1.mp4 --out runs/litter --server http://localhost:8000 --device-id CCTV-02
+
+# 1) 프로젝트 루트 폴더 이동
+cd C:/Users/HP/Desktop/capstone_project
+
+# 2) 최근 커밋 취소 및 캐시 초기화
+git reset origin/main
+git rm -r --cached .
+
+# 3) 전체 파일 다시 추적 및 커밋
+git add .
+git commit -m feat: 캡스톤 관제 시스템 및 쓰레기 오염도 분석 모듈 최종 통합
+
+# 4) 깃허브 푸시
+git push origin main
+"""

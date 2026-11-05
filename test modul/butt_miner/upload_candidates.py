@@ -30,7 +30,7 @@ def iso(dt):
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def build_message(name, meta, video_name, snap_id):
+def build_message(name, meta, video_name, snap_id, scene_id=None):
     # 주의: 대시보드가 message 에 대문자 'X:' 가 있으면 화재 이벤트로 취급하므로 쓰지 않는다.
     x, y, w, h = meta["bbox_xywh"]
     parts = [
@@ -42,6 +42,8 @@ def build_message(name, meta, video_name, snap_id):
     if video_name:
         parts.append(f"영상 {video_name}")
     parts.append(f"snap={snap_id}")           # 대시보드가 썸네일을 찾는 용도
+    if scene_id:
+        parts.append(f"scene={scene_id}")     # 대시보드가 '장면 보기' 링크를 만드는 용도(make_scene.py 가 만든 scene.jpg)
     return " | ".join(parts)
 
 
@@ -66,10 +68,15 @@ def main():
     p.add_argument("--limit", type=int, default=0, help="최대 전송 개수 (0이면 전부)")
     p.add_argument("--timeout", type=float, default=30)
     p.add_argument("--dry-run", action="store_true", help="서버에 보내지 않고 내용만 출력")
+    p.add_argument("--ids", default="", help="쉼표로 구분한 후보 폴더 이름만 올린다(예: ID1237,ID2000)")
+    p.add_argument("--redo", action="store_true", help="--ids 로 고른 후보는 이미 올린 기록이 있어도 다시 올린다(서버에서 먼저 지워야 중복되지 않음)")
     a = p.parse_args()
 
     root = Path(a.candidates)
     folders = sorted(d for d in root.glob("ID*") if (d / "meta.json").is_file() and (d / "panel.jpg").is_file())
+    only = {x.strip() for x in a.ids.split(",") if x.strip()}
+    if only:
+        folders = [d for d in folders if d.name in only]
     if not folders:
         raise SystemExit(f"후보 폴더가 없습니다(ID*/meta.json, panel.jpg 필요): {root.resolve()}")
 
@@ -98,7 +105,7 @@ def main():
     for d in folders:
         if a.limit and sent >= a.limit:
             break
-        if d.name in done:
+        if d.name in done and not (a.redo and d.name in only):
             skipped += 1
             continue
         meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
@@ -106,7 +113,7 @@ def main():
         frame_id = f"cand_{prefix}_{d.name}"
 
         if a.dry_run:
-            msg = build_message(d.name, meta, a.video_name, "snap_DRYRUN")
+            msg = build_message(d.name, meta, a.video_name, "snap_DRYRUN", "snap_DRYRUN" if ((d / "scene.gif").is_file() or (d / "scene.jpg").is_file()) else None)
             print(json.dumps({"timestamp": ts, "event_type": EVENT_TYPE, "severity": a.severity,
                               "message": msg, "related_detection_id": frame_id}, ensure_ascii=False))
             sent += 1
@@ -122,8 +129,26 @@ def main():
                 raise RuntimeError("snapshot " + api_error(r))
             snap_id = r.json()["snapshot_id"]
 
+            scene_id = None
+            for sname, sctype in (("scene.gif", "image/gif"), ("scene.jpg", "image/jpeg")):   # 움직이는 사진 우선, 거절되면 정지 사진
+                sp = d / sname
+                if not sp.is_file():
+                    continue
+                try:
+                    with open(sp, "rb") as f:
+                        r2 = requests.post(
+                            f"{base}/api/devices/{a.device_id}/snapshots", headers=headers, timeout=a.timeout,
+                            files={"file": (sname, f, sctype)},
+                            data={"metadata": json.dumps({"timestamp": ts, "frame_id": frame_id + "_scene"}, ensure_ascii=False)})
+                    if r2.ok:
+                        scene_id = r2.json()["snapshot_id"]
+                        break
+                    print(f"[주의] {d.name}: {sname} 업로드 실패 {api_error(r2)}")
+                except Exception as e2:
+                    print(f"[주의] {d.name}: {sname} 업로드 실패 {e2}")
+
             ev = {"timestamp": ts, "event_type": EVENT_TYPE, "severity": a.severity,
-                  "message": build_message(d.name, meta, a.video_name, snap_id),
+                  "message": build_message(d.name, meta, a.video_name, snap_id, scene_id),
                   "related_detection_id": frame_id, "snapshot_ref": snap_id}
             r = requests.post(f"{base}/api/devices/{a.device_id}/events", headers=headers, json=ev, timeout=a.timeout)
             if not r.ok:
@@ -133,7 +158,7 @@ def main():
             print(f"[실패] {d.name}: {e}")
             continue
 
-        done[d.name] = {"snapshot_id": snap_id, "timestamp": ts, "frame_id": frame_id}
+        done[d.name] = {"snapshot_id": snap_id, "scene_id": scene_id, "timestamp": ts, "frame_id": frame_id}
         log_path.write_text(json.dumps(done, ensure_ascii=False, indent=2), encoding="utf-8")
         sent += 1
         print(f"[전송] {d.name} -> {snap_id}")

@@ -203,6 +203,7 @@
         polygon.setMap(map);
 
         var geocoder = new kakao.maps.services.Geocoder(); 
+        var ps = new kakao.maps.services.Places(); // 💡 장소 검색 객체 추가
 
         var FIRE_WINDOW_MS = 15000;
         var POLL_MS = 2000;           
@@ -215,8 +216,9 @@
         var addressState = {}; 
         var isSirenMuted = false;
 
-        // 💡 확산 예측 부채꼴(Polygon)을 담을 객체
+        // 💡 확산 예측 부채꼴(Polygon)을 담을 객체 및 시간에 따라 퍼져나가는 확산 애니메이션 로직
         var spreadPolygons = {};
+        var spreadTimers = {}; 
 
         // 💡 화재 확산 예측 범위 그리기 함수
         function drawSpreadPrediction(cam) {
@@ -224,30 +226,31 @@
 
             // 시연용 설정: 현재 계절(바람) 풍향을 임의로 '북서풍(남동쪽 135도 방향으로 불어감)'으로 고정
             var windAngle = 135; 
-            var dist = 0.002; // 확산 반경 (지도 위 거리)
             var spreadAngle = 35; // 부채꼴 퍼짐 각도 (좌우 35도)
-
-            var radCenter = windAngle * Math.PI / 180;
-            var radLeft = (windAngle - spreadAngle) * Math.PI / 180;
-            var radRight = (windAngle + spreadAngle) * Math.PI / 180;
+            var maxDist = 0.012; // 💡 최대 확산 반경
+            var currentDist = 0.001; // 💡 시작 반경 (점점 커짐)
 
             var p1 = new kakao.maps.LatLng(cam.lat, cam.lng);
-            // 한국의 위/경도 비율을 고려해 y(lat)와 x(lng) 계산
-            var p2 = new kakao.maps.LatLng(cam.lat + Math.cos(radLeft)*dist, cam.lng + Math.sin(radLeft)*dist*1.25);
-            var p3 = new kakao.maps.LatLng(cam.lat + Math.cos(radRight)*dist, cam.lng + Math.sin(radRight)*dist*1.25);
-
             var spreadPolygon = new kakao.maps.Polygon({
-                path: [p1, p2, p3], 
-                strokeWeight: 2,
-                strokeColor: '#e74c3c',
-                strokeOpacity: 0.8,
-                fillStyle: 'solid',
-                fillColor: '#ff7675',
-                fillOpacity: 0.5
+                path: [], strokeWeight: 2, strokeColor: '#e74c3c', strokeOpacity: 0.8,
+                fillStyle: 'solid', fillColor: '#ff7675', fillOpacity: 0.4
             });
-
             spreadPolygon.setMap(map);
             spreadPolygons[cam.id] = spreadPolygon;
+
+            // 💡 1초마다 반경(currentDist)을 증가시켜 애니메이션 효과 구현
+            spreadTimers[cam.id] = setInterval(function() {
+                if (currentDist >= maxDist) { clearInterval(spreadTimers[cam.id]); return; }
+                currentDist += 0.0003; 
+
+                // 한국의 위/경도 비율을 고려해 y(lat)와 x(lng) 계산
+                var radLeft = (windAngle - spreadAngle) * Math.PI / 180;
+                var radRight = (windAngle + spreadAngle) * Math.PI / 180;
+                var p2 = new kakao.maps.LatLng(cam.lat + Math.cos(radLeft)*currentDist, cam.lng + Math.sin(radLeft)*currentDist*1.25);
+                var p3 = new kakao.maps.LatLng(cam.lat + Math.cos(radRight)*currentDist, cam.lng + Math.sin(radRight)*currentDist*1.25);
+                
+                spreadPolygon.setPath([p1, p2, p3]);
+            }, 1000);
         }
 
         // 💡 확산 예측 범위 지우기 함수
@@ -255,6 +258,10 @@
             if (spreadPolygons[camId]) {
                 spreadPolygons[camId].setMap(null);
                 delete spreadPolygons[camId];
+            }
+            if (spreadTimers[camId]) {
+                clearInterval(spreadTimers[camId]);
+                delete spreadTimers[camId];
             }
         }
 
@@ -423,9 +430,24 @@
 
             panelContainer.appendChild(itemEl);
             panelItems[cam.id] = itemEl;
+
+            // 💡 카메라가 추가될 때 반경 3km 내의 소방 자원을 검색해서 마커로 띄움
+            ps.keywordSearch('소방서', function(data, status) {
+                if (status === kakao.maps.services.Status.OK) {
+                    data.forEach(function(place) {
+                        var marker = new kakao.maps.Marker({ position: new kakao.maps.LatLng(place.y, place.x), map: map });
+                        new kakao.maps.CustomOverlay({
+                            position: new kakao.maps.LatLng(place.y, place.x),
+                            content: '<div style="background:#c0392b;color:white;padding:3px 6px;border-radius:4px;font-size:11px;font-weight:bold;margin-bottom:45px;">🚒 ' + place.place_name + '</div>',
+                            map: map
+                        });
+                    });
+                }
+            }, { location: new kakao.maps.LatLng(cam.lat, cam.lng), radius: 3000 });
         }
 
         function openCamera(cam) {
+            fetch('/api/devices/' + encodeURIComponent(cam.id) + '/run-litter').catch(function(e){});
             if (toastState[cam.id] === 'DISMISSED') toastState[cam.id] = 'IDLE';
             if (panelState[cam.id] === 'DISMISSED') panelState[cam.id] = 'IDLE';
             addressState[cam.id] = 'IDLE';
