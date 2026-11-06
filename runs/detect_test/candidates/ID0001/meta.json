@@ -1,0 +1,19 @@
+{
+  "id": 1,
+  "bbox_xywh": [
+    564,
+    66,
+    43,
+    47
+  ],
+  "detected_at_sec": 10.8,
+  "static_sec": 10.0,
+  "resolution": [
+    608,
+    320
+  ],
+  "class": "car",
+  "confidence": 0.446,
+  "auto_detected": true,
+  "timestamp": "2026-10-15T13:09:26Z"
+}

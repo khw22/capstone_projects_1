@@ -1,0 +1,12 @@
+{
+  "ID0001": {
+    "snapshot_id": "snap_d68ecefe58a6",
+    "timestamp": "2026-10-15T13:09:26Z",
+    "frame_id": "auto_fire1_ID0001"
+  },
+  "ID0002": {
+    "snapshot_id": "snap_20ad91e3e9b0",
+    "timestamp": "2026-10-15T13:09:31Z",
+    "frame_id": "auto_fire1_ID0002"
+  }
+}

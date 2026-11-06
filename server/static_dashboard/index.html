@@ -15,9 +15,9 @@
         <nav class="nav">
             <a href="#realtime" class="active">실시간 CCTV 상태</a>
             <a href="#pollution">오염도 현황</a>
-                <a href="#butt-candidates">꽁초 후보</a>
+            <a href="#butt-candidates">꽁초 후보</a>
             <a href="#th">실시간 확산 경로</a>
-            <a href="#incident-history">알림 처리 이력</a> <!-- 💡 처리 이력 메뉴 추가 -->
+            <a href="#incident-history">알림 처리 이력</a>
             <a href="#events">이벤트 기록</a>
             <a href="#settings">설정</a>
         </nav>
@@ -25,7 +25,7 @@
             <span class="dot" id="api-status-dot"></span>
             <span id="api-status-text">API 연결 확인 중…</span>
         </div>
-        <!-- 💡 우측 상단 날씨 및 검색 위젯 (여기에 추가!) -->
+        <!-- 우측 상단 날씨 및 검색 위젯 -->
         <div class="weather-widget">
             <div class="weather-search">
                 <input type="text" id="weather-input" placeholder="지역명 검색 (예: 서울, 제주)" />
@@ -78,15 +78,16 @@
             </table>
         </section>
 
+        <!-- 💡 오염도 현황 패널 (표 화면만 초기화하는 버튼 추가, 그래프는 안전하게 보존됨) -->
         <section id="pollution" class="panel">
             <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
                 <h2 style="margin: 0;">오염도 현황 <span class="badge"></span></h2>
-            
-                <button id="btn-show-pollution-stats" style="padding: 6px 12px; cursor: pointer; background: #3b5998; color: white; border: none; border-radius: 4px; font-weight: bold;">📊 누적수치 보기</button>
+                <div style="display: flex; gap: 8px;">
+                    <button id="btn-show-pollution-stats" style="padding: 6px 12px; cursor: pointer; background: #3b5998; color: white; border: none; border-radius: 4px; font-weight: bold;">📊 누적수치 보기</button>
+                </div>
             </div>
             <p class="note">
-                ※ 오염도 점수는 현재 통신 규약(v0.1)에 정의되어 있지 않아 백엔드에서
-                제공되지 않습니다. 프로토콜 확장 후 연동 예정입니다.
+                ※ 오염도 점수는 현재 통신 규약(v0.1)에 정의되어 있지 않아 백엔드에서 제공되지 않습니다. 프로토콜 확장 후 연동 예정입니다.
             </p>
             <h3>장치별 오염도 점수</h3>
             <table class="data-table" id="pollution-table">
@@ -103,10 +104,11 @@
             </table>
         </section>
 
-        <!-- 💡 [신규] 기기 수치 판독 섹션 -->
+        <!-- 실시간 기기 수치 판독 (OCR) 패널 -->
         <section id="ocr-section" class="panel">
-            <div class="section-header">
+            <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
                 <h2 style="margin: 0; color: #4ea1ff;">⏱️ 실시간 기기 수치 판독 (OCR)</h2>
+                <button id="btn-clear-ocr" style="padding: 6px 12px; cursor: pointer; background: #ff6b6b; color: white; border: none; border-radius: 4px; font-weight: bold;">🧹 OCR 초기화</button>
             </div>
             <p class="note">※ CCTV 영상 내의 시계, 온습도계 등의 수치를 AI가 판독하여 표시합니다.</p>
             <table class="data-table" id="ocr-table">
@@ -123,11 +125,14 @@
             </table>
         </section>
         
-                <section id="butt-candidates" class="panel">
-            <h2>지속 변화 후보 (꽁초·쓰레기) <span class="badge warn" id="butt-count">0건</span></h2>
+        <!-- 지속 변화 후보 (꽁초·쓰레기) 패널 -->
+        <section id="butt-candidates" class="panel">
+            <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
+                <h2 style="margin: 0;">지속 변화 후보 (꽁초·쓰레기) <span class="badge warn" id="butt-count">0건</span></h2>
+                <button id="btn-clear-candidates" style="padding: 6px 12px; cursor: pointer; background: #ff6b6b; color: white; border: none; border-radius: 4px; font-weight: bold;">🧹 후보 초기화</button>
+            </div>
             <p class="note">
-                ※ 고정 CCTV 영상에서 오래 정지한 변화를 자동으로 모은 <b>후보</b>입니다. 쓰레기·꽁초로 자동 분류한 결과가 아니며
-                사람 검수가 필요합니다. 실제 꽁초 검출 성능은 아직 검증되지 않았습니다.
+                ※ 고정 CCTV 영상에서 오래 정지한 변화를 자동으로 모은 <b>후보</b>입니다. 쓰레기·꽁초로 자동 분류한 결과가 아니며 사람 검수가 필요합니다. 실제 꽁초 검출 성능은 아직 검증되지 않았습니다.
             </p>
             <table class="data-table" id="butt-table">
                 <thead>
@@ -145,121 +150,112 @@
             </table>
         </section>
 
-        <!-- 변경 전: 온습도 정보 섹션을 지우고 아래 내용으로 교체합니다 -->
-<section id="th" class="card">
-    <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
-        <div style="display: flex; align-items: center; gap: 10px;">
-            <h2 style="margin: 0;">🔥 실시간 발화점 추적 현황</h2>
-            <span class="badge ai-active">AI 분석 중</span>
-        </div>
-        <!-- 💡 경보 끄기 버튼 (평소엔 숨겨둠) -->
-        <button id="btn-alarm-off" style="display: none; padding: 6px 12px; cursor: pointer; background: #ff4757; color: white; border: none; border-radius: 4px; font-weight: bold; box-shadow: 0 2px 5px rgba(255,0,0,0.3);">
-            🔕 경보 점멸 끄기
-        </button>
-    </div>
+        <!-- 실시간 발화점 추적 현황 패널 -->
+        <section id="th" class="card">
+            <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <h2 style="margin: 0;">🔥 실시간 발화점 추적 현황</h2>
+                    <span class="badge ai-active">AI 분석 중</span>
+                </div>
+                <button id="btn-alarm-off" style="display: none; padding: 6px 12px; cursor: pointer; background: #ff4757; color: white; border: none; border-radius: 4px; font-weight: bold; box-shadow: 0 2px 5px rgba(255,0,0,0.3);">
+                    🔕 경보 점멸 끄기
+                </button>
+            </div>
+            <p class="help-text">
+                ※ YOLOv8 모델이 화재 객체를 처음 인식한 좌표(발화점)를 추적하여 표시합니다.
+            </p>
+            <p id="fire-where" style="display: none; margin: 8px 0; font-size: 15px; color: #ff4757;"></p>
+            <div class="table-responsive">
+                <table id="fire-origin-table" class="data-table">
+                    <thead>
+                        <tr>
+                            <th>장치 ID</th>
+                            <th>발화 감지 시각</th>
+                            <th>실시간 확산 경로 (발화 원점 ➡️ 현재 위치)</th>
+                            <th>위험 등급</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </section>
 
-    <p class="help-text">
-        ※ YOLOv8 모델이 화재 객체를 처음 인식한 좌표(발화점)를 추적하여 표시합니다.
-    </p>
-      <p id="fire-where" style="display: none; margin: 8px 0; font-size: 15px; color: #ff4757;"></p>
-    <div class="table-responsive">
-        <table id="fire-origin-table" class="data-table">
-            <thead>
-                <tr>
-                    <th>장치 ID</th>
-                    <th>발화 감지 시각</th>
-                    <th>실시간 확산 경로 (발화 원점 ➡️ 현재 위치)</th>
-                    <th>위험 등급</th>
-                </tr>
-            </thead>
-            <tbody>
-                <!-- 데이터가 여기에 표시됩니다 -->
-            </tbody>
-        </table>
-    </div>
-</section>
-
-        <!-- 💡 [신규 추가] 알림 처리 이력 섹션 -->
+        <!-- 알림 처리 이력 패널 -->
         <section id="incident-history" class="panel">
-    <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
-        <h2 style="margin: 0; color: #e67e22;">📝 알림 처리 이력 (진압 프로세스)</h2>
-        <!-- 💡 전체 삭제 버튼 추가 -->
-        <button onclick="clearAllIncidents()" style="padding: 6px 12px; cursor: pointer; background: #ff6b6b; color: white; border: none; border-radius: 4px; font-weight: bold;">🧹 전체 이력 지우기</button>
-    </div>
-    <table class="data-table" id="incident-table" style="margin-top: 15px;">
-        <thead>
-            <tr>
-                <th>발생 일시</th>
-                <th>장치 (위치)</th>
-                <th>화재 순간 캡처</th>
-                <th>상태</th>
-                <th>담당자</th>
-                <th>최근 처리 시각</th>
-                <th>작업</th>
-            </tr>
-        </thead>
-        <tbody></tbody>
-    </table>
-</section>
+            <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
+                <h2 style="margin: 0; color: #e67e22;">📝 알림 처리 이력 (진압 프로세스)</h2>
+                <button onclick="clearAllIncidents()" style="padding: 6px 12px; cursor: pointer; background: #ff6b6b; color: white; border: none; border-radius: 4px; font-weight: bold;">🧹 전체 이력 지우기</button>
+            </div>
+            <table class="data-table" id="incident-table" style="margin-top: 15px;">
+                <thead>
+                    <tr>
+                        <th>발생 일시</th>
+                        <th>장치 (위치)</th>
+                        <th>화재 순간 캡처</th>
+                        <th>상태</th>
+                        <th>담당자</th>
+                        <th>최근 처리 시각</th>
+                        <th>작업</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </section>
 
+        <!-- 이벤트 기록 패널 -->
         <section id="events" class="panel">
-    <!-- 제목과 버튼들을 나란히 배치하는 구역 -->
-    <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
-        <h2 style="margin: 0;">이벤트 기록</h2>
-        <div style="display: flex; gap: 8px;"> <!-- 💡 간격을 위해 gap: 8px 추가 -->
-            
-            <!-- 💡 추가된 원격 영상 경보 끄기 버튼 -->
-            <button id="btn-remote-alarm-off" style="padding: 6px 12px; cursor: pointer; background: #34495e; color: white; border: none; border-radius: 4px; font-weight: bold;">🔕 화재 감지 끄기</button>
-            
-            <button id="btn-export" style="padding: 6px 12px; cursor: pointer; background: #4CAF50; color: white; border: none; border-radius: 4px; font-weight: bold;">💾 엑셀 저장</button>
-            <button id="btn-clear" style="padding: 6px 12px; cursor: pointer; background: #ff6b6b; color: white; border: none; border-radius: 4px; font-weight: bold;">🧹 화면 지우기</button>
-        </div>
-    </div>
-    
-    <table class="data-table" id="events-table" style="margin-top: 15px;">
-        <thead>
-            <tr>
-                <th>시각</th>
-                <th>장치</th>
-                <th>유형</th>
-                <th>내용</th>
-            </tr>
-        </thead>
-        <tbody></tbody>
-    </table>
-</section>
+            <div class="section-header" style="display: flex; justify-content: space-between; align-items: center;">
+                <h2 style="margin: 0;">이벤트 기록</h2>
+                <div style="display: flex; gap: 8px;"> 
+                    <button id="btn-remote-alarm-off" style="padding: 6px 12px; cursor: pointer; background: #34495e; color: white; border: none; border-radius: 4px; font-weight: bold;">🔕 화재 감지 끄기</button>
+                    <button id="btn-export" style="padding: 6px 12px; cursor: pointer; background: #4CAF50; color: white; border: none; border-radius: 4px; font-weight: bold;">💾 엑셀 저장</button>
+                    <button id="btn-clear" style="padding: 6px 12px; cursor: pointer; background: #ff6b6b; color: white; border: none; border-radius: 4px; font-weight: bold;">🧹 화면 지우기</button>
+                </div>
+            </div>
+            <table class="data-table" id="events-table" style="margin-top: 15px;">
+                <thead>
+                    <tr>
+                        <th>시각</th>
+                        <th>장치</th>
+                        <th>유형</th>
+                        <th>내용</th>
+                    </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </section>
 
         <section id="settings" class="panel">
-    <h2>설정 및 시스템 정보</h2>
-    <div class="cards">
-        <div class="card info">
-            <span class="label">서버 상태</span>
-            <span class="value ok">정상 연결됨</span>
-        </div>
-        <div class="card info">
-            <span class="label">현재 모델 버전</span>
-            <span class="value" id="setting-model-version">yolov8-fire-v2</span>
-        </div>
-        <div class="card info">
-            <span class="label">AI 분석 엔진</span>
-            <span class="value ok">실시간 가동 중</span>
-        </div>
-        <div class="card info">
-            <span class="label">규칙셋 버전</span>
-            <span class="value">v1.0 (적용됨)</span>
-        </div>
-    </div>
-    <p class="note">
-        ※ 실시간 CCTV 상태·이벤트 기록은 백엔드 API(<code id="setting-api-base">/</code>)에서 연동되어 처리됩니다.
-    </p>
-</section>
+            <h2>설정 및 시스템 정보</h2>
+            <div class="cards">
+                <div class="card info">
+                    <span class="label">서버 상태</span>
+                    <span class="value ok">정상 연결됨</span>
+                </div>
+                <div class="card info">
+                    <span class="label">현재 모델 버전</span>
+                    <span class="value" id="setting-model-version">yolov8-fire-v2</span>
+                </div>
+                <div class="card info">
+                    <span class="label">AI 분석 엔진</span>
+                    <span class="value ok">실시간 가동 중</span>
+                </div>
+                <div class="card info">
+                    <span class="label">규칙셋 버전</span>
+                    <span class="value">v1.0 (적용됨)</span>
+                </div>
+            </div>
+            <p class="note">
+                ※ 실시간 CCTV 상태·이벤트 기록은 백엔드 API(<code id="setting-api-base">/</code>)에서 연동되어 처리됩니다.
+            </p>
+        </section>
     </main>
 
     <footer class="bottombar">
         <small>CCTV 기반 환경 적응형 통합 관제 시스템</small>
     </footer>
 
-    <!-- 💡 오염도 통계 모달창 (HTML 최하단 추가) -->
+    <!-- 통계 모달창 -->
     <div id="stats-modal" class="modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6); z-index: 9999; justify-content: center; align-items: center;">
         <div style="background: #fff; padding: 20px; border-radius: 8px; width: 800px; max-width: 95%; box-shadow: 0 4px 15px rgba(0,0,0,0.3);">
             <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
@@ -280,13 +276,13 @@
         </div>
     </div>
 
-    <!-- API base URL. Override by editing this value (or set window.API_BASE
-         before script.js loads) for non-localhost deployments. -->
+    <!-- API base URL 설정 -->
     <script>
         window.API_BASE = window.API_BASE || "http://localhost:8000";
     </script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="butt_candidates.js"></script>
     <script src="script.js"></script>
+    <script src="admin_bar.js"></script>
 </body>
 </html>

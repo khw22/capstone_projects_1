@@ -164,7 +164,7 @@ function renderStatCards(devices) {
 }
 
 function renderRealtimeUnavailable(message) {
-    delete _liveCache["cctv-table"];   // 서버가 돌아오면 표를 다시 그리도록 캐시 무효화
+    delete _liveCache["cctv-table"];   
     setBody("cctv-table", fullWidthRow("cctv-table", message, "error"));
     ["stat-online", "stat-streaming", "stat-offline"].forEach((id) => {
         const el = document.getElementById(id);
@@ -176,7 +176,6 @@ function renderRealtimeUnavailable(message) {
 
 async function loadRealtime() {
     const data = await apiGet("/api/devices");
-    // 💡 local-ai-server나 local ai server가 포함된 항목을 목록에서 제외합니다.
     const rawDevices = (data && data.devices) || [];
     const devices = rawDevices.filter(d => {
         const id = (d.device_id || "").toLowerCase();
@@ -216,11 +215,8 @@ async function loadEvents(devices) {
     events.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
 
     allFetchedEvents = events;
-
     const displayEvents = events.filter(e => new Date(e.timestamp).getTime() >= clearTimestamp);
 
-    // 꽁초 후보 패널은 후보 관련 이벤트가 바뀔 때만 다시 그린다.
-    // (호출할 때마다 장치당 1000건을 다시 조회하고 필터 UI 까지 새로 그리므로 매 갱신마다 부르면 렉이 생긴다)
     const buttRows = displayEvents.filter((e) => BUTT_TYPES.indexOf(e.event_type) >= 0);
     const buttSig = `${devices.length}|${buttRows.length}|${buttRows.length ? buttRows[0].timestamp : ""}`;
     if (window.renderButtCandidates && buttSig !== lastButtSig) {
@@ -248,16 +244,14 @@ async function loadEvents(devices) {
         return;
     }
 
-    // 이번에 처음 보는 이벤트 (첫 로드는 제외) -> 행을 잠깐 강조
     const newKeys = new Set();
     if (!firstLoad) displayEvents.forEach((e) => { const k = evKey(e); if (!seenKeys.has(k)) newKeys.add(k); });
 
-    // 💡 데이터 렌더링 분리 (실시간 추적 vs 일반 이벤트 로그)
     const fireEvents = displayEvents.filter(e => e.event_type === "fire_tracking");
     const ocrEvents = displayEvents.filter(e => e.event_type === "ocr_reading");
-    const logEvents = displayEvents.filter(e => e.event_type !== "fire_tracking" && e.event_type !== "ocr_reading");
+    const logEvents = displayEvents.filter(e => e.event_type !== "fire_tracking" && e.event_type !== "ocr_reading" && !BUTT_TYPES.includes(e.event_type));
 
-    // 1. 하단 이벤트 기록 렌더링 (logEvents 전용)
+    // 1. 하단 이벤트 기록 렌더링
     if (logEvents.length === 0) {
         setBodyLive("events-table", fullWidthRow("events-table", "이벤트가 없습니다.", "muted"));
     } else {
@@ -274,8 +268,7 @@ async function loadEvents(devices) {
         }).join(""));
     }
 
-    // 2. 상단 화재 추적 현황 (fireEvents 전용)
-    //    '화재 중' 판단(점멸 경보/요약)은 최근 FIRE_ACTIVE_MS 안의 감지만 사용. 표에는 기록을 계속 보여 준다.
+    // 2. 상단 화재 추적 현황
     const nowMs = Date.now();
     const isActive = (e) => (nowMs - new Date(e.timestamp).getTime()) <= FIRE_ACTIVE_MS;
     if (fireEvents.length > 0) {
@@ -285,18 +278,16 @@ async function loadEvents(devices) {
         setFireWhere(fireIds);
 
         if (activeFire.length > 0) {
-            // 💡 불이 새로 났을 때 (기존에 불이 없었는데 새로 생김)
             if (!isFireCurrentlyActive) {
                 isFireCurrentlyActive = true;
-                isAlarmAcknowledged = false; // 새 화재이므로 경보 해제 상태 초기화
+                isAlarmAcknowledged = false; 
             }
-            // 💡 관리자가 아직 경보를 끄지 않았다면 빨간색 점멸 켜기!
             if (!isAlarmAcknowledged) {
                 if (thSection) thSection.classList.add("alarm-active");
-                if (btnAlarmOff) btnAlarmOff.style.display = "block"; // 끄기 버튼 보이기
+                if (btnAlarmOff) btnAlarmOff.style.display = "block";
             }
         } else {
-            endAlarm();   // 화재 감지가 끊긴 지 FIRE_ACTIVE_MS 가 지나면 경보 종료
+            endAlarm();   
         }
 
         setBodyLive("fire-origin-table", fireEvents.map((e) => {
@@ -311,13 +302,12 @@ async function loadEvents(devices) {
             </tr>`;
         }).join(""));
     } else {
-        // 💡 불이 꺼졌을 때 (안전 상태)
         endAlarm();
         setFireWhere([]);
         setBodyLive("fire-origin-table", fullWidthRow("fire-origin-table", "현재 감지된 화재가 없습니다 (안전 상태).", "ok"));
     }
 
-    // 3. OCR 판독 결과 렌더링 (최신순 5개까지만 화면에 표시)
+    // 3. OCR 판독 결과 렌더링
     if (ocrEvents.length > 0) {
         setBodyLive("ocr-table", ocrEvents.slice(0, 5).map((e) => `
             <tr data-k="${evKey(e)}">
@@ -353,8 +343,6 @@ async function loadIncidents() {
             const statusClass = i.status === '발생' ? 'bad' : i.status === '확인중' ? 'warn' : 'ok';
             const btn1 = i.status === '발생' ? `<button onclick="updateIncident('${i.id}', '확인중')" style="padding:4px 8px; background:#f39c12; border:none; color:white; border-radius:4px; cursor:pointer; margin-right:4px;">👀 확인 중</button>` : '';
             const btn2 = i.status === '확인중' ? `<button onclick="updateIncident('${i.id}', '조치완료')" style="padding:4px 8px; background:#27ae60; border:none; color:white; border-radius:4px; cursor:pointer; margin-right:4px;">✅ 조치 완료</button>` : '';
-            
-            // 💡 개별 삭제 버튼 추가
             const deleteBtn = `<button onclick="deleteIncident('${i.id}')" style="padding:4px 8px; background:#e74c3c; border:none; color:white; border-radius:4px; cursor:pointer;">🗑️ 삭제</button>`;
             
             return `
@@ -368,9 +356,7 @@ async function loadIncidents() {
                 <td>${btn1} ${btn2} ${deleteBtn}</td>
             </tr>`;
         }).join(""));
-    } catch (e) {
-        console.error("이력 로드 실패:", e);
-    }
+    } catch (e) { console.error("이력 로드 실패:", e); }
 }
 
 window.updateIncident = async function(id, status) {
@@ -384,34 +370,22 @@ window.updateIncident = async function(id, status) {
     loadIncidents(); 
 };
 
-// 💡 개별 삭제 실행 함수
 window.deleteIncident = async function(id) {
     if (!confirm("이 처리 이력을 삭제하시겠습니까?")) return;
     try {
         const res = await fetch(`${API_BASE}/api/incidents/${id}`, { method: 'DELETE' });
-        if (res.ok) {
-            loadIncidents();
-        } else {
-            alert("삭제에 실패했습니다.");
-        }
-    } catch (err) {
-        alert("서버 통신 오류: " + err.message);
-    }
+        if (res.ok) loadIncidents();
+        else alert("삭제에 실패했습니다.");
+    } catch (err) { alert("서버 통신 오류: " + err.message); }
 };
 
-// 💡 전체 삭제 실행 함수
 window.clearAllIncidents = async function() {
     if (!confirm("모든 알림 처리 이력을 영구적으로 삭제하시겠습니까?")) return;
     try {
         const res = await fetch(`${API_BASE}/api/incidents`, { method: 'DELETE' });
-        if (res.ok) {
-            loadIncidents();
-        } else {
-            alert("전체 삭제에 실패했습니다.");
-        }
-    } catch (err) {
-        alert("서버 통신 오류: " + err.message);
-    }
+        if (res.ok) loadIncidents();
+        else alert("전체 삭제에 실패했습니다.");
+    } catch (err) { alert("서버 통신 오류: " + err.message); }
 };
 
 function renderUnbackedSections() {
@@ -425,24 +399,22 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     renderUnbackedSections();
 
-    // 영구 삭제 기능
+    // 💡 1. [이벤트 기록 / 화재 추적 현황] 전용 초기화 버튼
     const btnClear = document.getElementById("btn-clear");
     if (btnClear) {
         btnClear.addEventListener("click", async () => {
-            if (!confirm("모든 이벤트 기록을 영구적으로 삭제하시겠습니까?\n데이터베이스에서 완전히 지워지며 되돌릴 수 없습니다.")) {
+            if (!confirm("화재 관련 이벤트 및 실시간 발화점 추적 기록을 삭제하시겠습니까?\n데이터베이스에서 완전히 지워지며 되돌릴 수 없습니다.")) {
                 return;
             }
             try {
                 const data = await loadRealtime();
                 for (const d of data) {
-                    await fetch(`${API_BASE}/api/devices/${encodeURIComponent(d.device_id)}/events`, {
+                    await fetch(`${API_BASE}/api/devices/${encodeURIComponent(d.device_id)}/events?type=fire`, {
                         method: "DELETE"
                     });
                 }
-                alert("영구 삭제 완료!");
-                allFetchedEvents = []; 
+                alert("화재 및 이벤트 기록 삭제 완료!");
                 setBody("events-table", fullWidthRow("events-table", "이벤트가 없습니다.", "muted"));
-                if (window.renderButtCandidates) window.renderButtCandidates([]);
                 setBody("fire-origin-table", fullWidthRow("fire-origin-table", "현재 감지된 화재가 없습니다 (안전 상태).", "ok"));
                 setFireWhere([]);
             } catch (err) {
@@ -451,19 +423,57 @@ document.addEventListener("DOMContentLoaded", async () => {
         });
     }
 
-    // 🚨 여기에 경보 점멸 끄기 버튼 클릭 이벤트 추가!
+    // 💡 2. [기기 수치 판독 (OCR)] 전용 초기화 버튼
+    const btnClearOcr = document.getElementById("btn-clear-ocr");
+    if (btnClearOcr) {
+        btnClearOcr.addEventListener("click", async () => {
+            if (!confirm("OCR 기기 판독 수치 기록을 모두 지우시겠습니까?")) return;
+            try {
+                const data = await loadRealtime();
+                for (const d of data) {
+                    await fetch(`${API_BASE}/api/devices/${encodeURIComponent(d.device_id)}/events?type=ocr`, {
+                        method: "DELETE"
+                    });
+                }
+                alert("OCR 초기화 완료!");
+                setBody("ocr-table", fullWidthRow("ocr-table", "아직 측정된 수치가 없습니다.", "muted"));
+            } catch (err) {
+                alert("OCR 삭제 실패: " + err.message);
+            }
+        });
+    }
+
+    // 💡 3. [지속 변화 후보 (쓰레기/꽁초)] 전용 초기화 버튼
+    const btnClearCandidates = document.getElementById("btn-clear-candidates");
+    if (btnClearCandidates) {
+        btnClearCandidates.addEventListener("click", async () => {
+            if (!confirm("쓰레기/꽁초 후보 사진과 목록을 모두 초기화하시겠습니까?")) return;
+            try {
+                const data = await loadRealtime();
+                for (const d of data) {
+                    await fetch(`${API_BASE}/api/devices/${encodeURIComponent(d.device_id)}/events?type=candidate`, {
+                        method: "DELETE"
+                    });
+                }
+                alert("후보 목록 초기화 완료!");
+                if (window.renderButtCandidates) window.renderButtCandidates([]);
+            } catch (err) {
+                alert("후보 목록 삭제 실패: " + err.message);
+            }
+        });
+    }
+
+    // 🚨 경보 점멸 끄기 버튼 클릭 이벤트
     const btnAlarmOff = document.getElementById("btn-alarm-off");
     if (btnAlarmOff) {
         btnAlarmOff.addEventListener("click", () => {
-            isAlarmAcknowledged = true; // 관리자가 인지함
-            
-            // 시각적 알람(점멸) 제거 및 버튼 숨기기
+            isAlarmAcknowledged = true;
             document.getElementById("th").classList.remove("alarm-active");
             btnAlarmOff.style.display = "none";
         });
     }
 
-    // 🚨 [추가] 영상 원격 제어 (빨간 테두리 끄기) 명령 전송 기능
+    // 🚨 영상 원격 제어 (빨간 테두리 끄기) 명령 전송
     const btnRemoteAlarmOff = document.getElementById("btn-remote-alarm-off");
     if (btnRemoteAlarmOff) {
         btnRemoteAlarmOff.addEventListener("click", async () => {
@@ -489,13 +499,11 @@ document.addEventListener("DOMContentLoaded", async () => {
         });
     }
 
-    // 엑셀 저장 기능 (💡 실시간 좌표 도배 로그는 빼고, 깨끗한 기록만 저장되도록 필터링 적용!)
+    // 엑셀 저장 기능 (화재 추적 제외)
     const btnExport = document.getElementById("btn-export");
     if (btnExport) {
         btnExport.addEventListener("click", () => {
-            // fire_tracking을 제외한 진짜 이벤트 기록만 다운로드
             const exportData = allFetchedEvents.filter(e => e.event_type !== "fire_tracking");
-            
             if (!exportData.length) return alert("저장할 이벤트 로그가 없습니다.");
             
             let csv = "발생일시,장치ID,위치,이벤트유형,위험도,상세내용\n";
@@ -505,7 +513,7 @@ document.addEventListener("DOMContentLoaded", async () => {
                 const loc = String(deviceLocations[e.device_id] || "").replace(/,/g, " ");
                 const type = e.event_type || "";
                 const sev = SEVERITY_LABEL[e.severity] || e.severity || "";
-                const msg = (e.message || "").replace(/,/g, " "); // CSV 호환을 위해 쉼표 제거
+                const msg = (e.message || "").replace(/,/g, " ");
                 csv += `${time},${dev},${loc},${type},${sev},${msg}\n`;
             });
 
@@ -518,12 +526,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         });
     }
 
-    // ---- 실시간 갱신 루프 ----
-    // - 이전 요청이 끝난 뒤에만 다음 요청 (요청이 겹쳐 쌓이지 않음)
-    // - 탭이 숨겨져 있으면 쉬고, 다시 보이면 즉시 갱신
-    // - 서버 오류 시 간격을 늘려 재시도 (최대 30초), 복구되면 원래 주기로
     let inFlight = false, failCount = 0, liveTimer = null, liveGen = 0;
-
     const refreshData = async () => {
         if (inFlight) return;
         inFlight = true;
@@ -531,7 +534,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             const devices = await loadRealtime();
             setApiStatus("online", `API 연결됨 · 장치 ${devices.length}대 · 실시간 ${new Date().toLocaleTimeString("ko-KR")}`);
             await loadEvents(devices);
-            await loadIncidents(); // 💡 이력 통신 추가
+            await loadIncidents(); 
             failCount = 0;
         } catch (err) {
             failCount++;
@@ -543,7 +546,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     };
 
     const startLoop = (immediate) => {
-        const gen = ++liveGen;               // 새 루프가 시작되면 이전 루프는 스스로 멈춘다
+        const gen = ++liveGen;
         clearTimeout(liveTimer);
         const tick = async () => {
             if (gen !== liveGen) return;
@@ -556,26 +559,21 @@ document.addEventListener("DOMContentLoaded", async () => {
     };
 
     document.addEventListener("visibilitychange", () => { if (!document.hidden) startLoop(true); });
-
-    await refreshData();   // 최초 1회 로드
-    startLoop(false);      // 이후 LIVE_MS 마다 자동 갱신 (F5 불필요)
+    await refreshData();
+    startLoop(false);
 });
 
 // ==========================================
 // 🌤️ 날씨 및 온습도 검색 & 현재 위치 연동
 // ==========================================
-
-// 1. 위도/경도를 받아 날씨를 업데이트하는 함수 (Open-Meteo API)
 async function updateWeather(lat, lon, locationName) {
     try {
         const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code`);
         const data = await res.json();
-        
         const temp = data.current.temperature_2m;
         const hum = data.current.relative_humidity_2m;
         const code = data.current.weather_code;
         
-        // WMO 날씨 코드에 따른 간단한 이모티콘 매핑
         let icon = "☀️";
         if (code >= 1 && code <= 3) icon = "⛅";
         else if (code >= 45 && code <= 48) icon = "🌫️";
@@ -588,13 +586,11 @@ async function updateWeather(lat, lon, locationName) {
         document.getElementById('w-temp').textContent = `${temp}°C`;
         document.getElementById('w-hum').textContent = `💧${hum}%`;
         document.getElementById('w-icon').textContent = icon;
-        
     } catch (e) {
         console.error("날씨 정보를 불러오는데 실패했습니다.", e);
     }
 }
 
-// 2. 검색어를 통해 특정 지역의 위도/경도를 찾는 함수
 async function searchLocation(query) {
     try {
         const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`);
@@ -606,55 +602,42 @@ async function searchLocation(query) {
             alert("검색하신 지역을 찾을 수 없습니다.");
         }
     } catch (e) {
-        console.error("지역 검색 실패", e);
         alert("지역 검색 중 오류가 발생했습니다.");
     }
 }
 
-// 💡 3. 접속한 사용자의 현재 위치를 찾아 날씨를 띄우는 함수
 function loadCurrentLocationWeather() {
     if (navigator.geolocation) {
         navigator.geolocation.getCurrentPosition(async (position) => {
             const lat = position.coords.latitude;
             const lon = position.coords.longitude;
-            
             try {
-                // 현재 좌표를 지역명(동/구/시)으로 변환
                 const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
                 const data = await res.json();
-                
-                // 주소 정보 중 가장 적절한 지역명 추출
                 let locName = "현재 위치";
                 if (data.address) {
                     locName = data.address.city || data.address.town || data.address.borough || data.address.suburb || "현재 위치";
                 }
-                
                 updateWeather(lat, lon, locName);
             } catch (e) {
                 updateWeather(lat, lon, "현재 위치");
             }
         }, (error) => {
-            console.warn("위치 권한 거부 또는 오류 발생. 기본 위치(인천)로 표시합니다.");
-            // 위치 권한을 거부할 경우 기본값 (인천광역시 좌표)
             updateWeather(37.4563, 126.7052, "인천광역시");
         });
     } else {
-        console.warn("브라우저가 위치 정보를 지원하지 않습니다.");
         updateWeather(37.4563, 126.7052, "인천광역시");
     }
 }
 
-// 4. 이벤트 리스너 등록
 document.addEventListener("DOMContentLoaded", () => {
     const btnSearch = document.getElementById("btn-weather-search");
     const inputSearch = document.getElementById("weather-input");
-
     if (btnSearch && inputSearch) {
         btnSearch.addEventListener("click", () => {
             const query = inputSearch.value.trim();
             if (query) searchLocation(query);
         });
-
         inputSearch.addEventListener("keypress", (e) => {
             if (e.key === "Enter") {
                 const query = inputSearch.value.trim();
@@ -662,7 +645,5 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         });
     }
-
-    // 💡 초기 로딩 시 무조건 '현재 위치' 기반 날씨 표출 실행
     loadCurrentLocationWeather();
 });

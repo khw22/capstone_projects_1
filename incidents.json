@@ -1,11 +1,29 @@
 [
   {
-    "id": "inc_88d0c074",
+    "id": "inc_9c4b4670",
     "device_id": "CCTV-03",
     "status": "발생",
     "assignee": "",
-    "created_at": "2026-11-04T14:46:58Z",
-    "updated_at": "2026-11-04T14:46:58Z",
-    "snapshot_url": "/api/snapshots/fire_81f776"
+    "created_at": "2026-11-06T08:13:34Z",
+    "updated_at": "2026-11-06T08:13:34Z",
+    "snapshot_url": "/api/snapshots/fire_40e74e"
+  },
+  {
+    "id": "inc_b44e9d9b",
+    "device_id": "CCTV-03",
+    "status": "발생",
+    "assignee": "",
+    "created_at": "2026-11-06T08:12:42Z",
+    "updated_at": "2026-11-06T08:12:42Z",
+    "snapshot_url": "/api/snapshots/fire_339182"
+  },
+  {
+    "id": "inc_7c40b975",
+    "device_id": "CCTV-01",
+    "status": "발생",
+    "assignee": "",
+    "created_at": "2026-11-06T08:04:55Z",
+    "updated_at": "2026-11-06T08:04:55Z",
+    "snapshot_url": "/api/snapshots/fire_6153e8"
   }
 ]

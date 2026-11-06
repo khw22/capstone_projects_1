@@ -4,7 +4,6 @@ Run from the repo root:
     uvicorn server.api.main:app --reload --port 8000
     C:/Users/HP/Desktop/raspi-cctv-project/venv/Scripts/Activate.ps1
 
-
 Environment variables:
     CCTV_REQUIRE_AUTH=1   -> enable X-Device-Api-Key check on ingest endpoints (default: off)
     CCTV_VIDEO_DIR=...    -> directory that /api/stream_video may read from (default: repo root)
@@ -38,9 +37,11 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel # 💡 알림 처리 이력을 위한 BaseModel 추가
+from pydantic import BaseModel
 
-from . import storage, incidents # 💡 incidents 모듈 추가
+from . import admin_auth
+from . import storage
+from . import incidents  # 💡 친구 기능: 알림 이력 관리 모듈 추가
 from .auth import require_api_key
 from .models import (
     DetectionsIn,
@@ -51,16 +52,15 @@ from .models import (
 
 app = FastAPI(title="raspi-cctv central server", version="0.1.0")
 
-# --- 💡 알림 처리 이력 업데이트 모델 추가 ---
+# --- 💡 알림 처리 이력 업데이트 및 통계 모델 추가 ---
 class IncidentUpdate(BaseModel):
     status: Optional[str] = None
     assignee: Optional[str] = None
 
-# --- 💡 통계 누적 업데이트 모델 추가 ---
 class StatUpdateIn(BaseModel):
     device_id: str
-    timestamp: str  # 이벤트 시각
-    score_diff: int # 추가되거나 깎일 점수
+    timestamp: str  
+    score_diff: int 
 
 # Static dashboard runs on a different origin (http://localhost:8000) during dev.
 app.add_middleware(
@@ -71,6 +71,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 관리자 로그인 보호 (CCTV_ADMIN_PASSWORD 환경변수가 있을 때만 켜짐. 정적 파일 mount 보다 앞에서 호출해야 한다)
+_ADMIN = admin_auth.install(app, storage.get_api_key)
+
 REQUIRE_AUTH = os.getenv("CCTV_REQUIRE_AUTH", "0") == "1"
 
 # repo root = server/api/main.py -> parents[2]
@@ -78,9 +81,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 VIDEO_DIR = Path(os.getenv("CCTV_VIDEO_DIR", str(_REPO_ROOT))).resolve()
 ALLOWED_VIDEO_EXT = {".mp4", ".avi", ".mov", ".mkv"}
 
-# --- 💡 텔레그램 알림 연동 설정 ---
-# 토큰/채팅 ID 는 코드에 적지 말고 환경변수로 지정한다 (코드를 공유하거나 깃에 올려도 노출되지 않게).
-#   PowerShell:  $env:CCTV_TELEGRAM_TOKEN="봇토큰"; $env:CCTV_TELEGRAM_CHAT_ID="채팅ID"
+# --- 💡 텔레그램 알림 연동 설정 (본인 토큰 유지) ---
 TELEGRAM_BOT_TOKEN = "8712296479:AAH8XJeyDKGmtC8Zf8u4jA3SQMd8pxLG8_4"
 TELEGRAM_CHAT_ID = "8240192422"
 _tg_warned = False
@@ -101,17 +102,16 @@ def send_telegram_fire_alert(device_id: str, frame) -> None:
     _last_tg_alert[device_id] = now
     
     try:
-        # 💡 1. cameras.json에 등록된 카메라 정보(이름) 가져오기
+        # 💡 카메라 정보(이름) 가져오기
         cam_info = _CAMERAS.get(device_id, {})
         cam_name = cam_info.get("name", "")
         
-        # 💡 2. CCTV ID와 이름을 보기 쉽게 조합
+        # 💡 CCTV ID와 이름을 보기 쉽게 조합
         location_display = f"{device_id}"
         if cam_name:
             location_display += f" ({cam_name})"
             
-        # 💡 3. 실제 주소 설정 (cameras.json 등록 이름 또는 좌표 기반 주소 매핑)
-        # map.html과 동일하게 각 CCTV 이름별 실제 주소를 매칭합니다.
+        # 💡 실제 주소 설정 (cameras.json 등록 이름 기반 주소 매핑)
         address_str = "경기도 안양시 만안구 삼덕로37번길 22 (안양대학교)"
         if cam_name == "안양대 정문":
             address_str = "경기도 안양시 만안구 안양로 229 (안양대학교 정문)"
@@ -125,7 +125,7 @@ def send_telegram_fire_alert(device_id: str, frame) -> None:
         
         time_str = time.strftime("%Y-%m-%d %H:%M:%S")
         
-        # 💡 4. 텔레그램 메시지 포맷에 CCTV 이름과 실제 주소 반영
+        # 💡 텔레그램 메시지 포맷에 CCTV 이름과 실제 주소 반영
         caption = (
             f"🔥 [긴급] 화재 감지 알림!\n\n"
             f"📹 CCTV: {location_display}\n"
@@ -140,40 +140,38 @@ def send_telegram_fire_alert(device_id: str, frame) -> None:
             url, 
             data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption},
             files={"photo": ("fire_snapshot.jpg", buffer.tobytes(), "image/jpeg")}, 
-            timeout=5
+            timeout=20
         )
         if resp.ok:
             print(f"[stream] 📱 [{device_id}] 텔레그램 화재 사진 및 주소 전송 완료!")
-        else:  # 토큰/채팅 ID 오류 등은 예외가 아니라 HTTP 오류 코드로 오므로 직접 확인
+        else:
             print(f"[stream] ❌ 텔레그램 전송 실패: HTTP {resp.status_code} {resp.text[:150]}")
     except Exception as e:
-        # 오류 문구에 토큰이 들어간 주소가 섞여 나올 수 있어 가려서 출력
         print(f"[stream] ❌ 텔레그램 전송 실패: {str(e).replace(TELEGRAM_BOT_TOKEN, '***')}")
-
 
 # --- AI 모델 (서버 시작 시 백그라운드에서 1회 로드) ---
 FIRE_MODEL_PATH = Path(os.getenv("CCTV_FIRE_MODEL", str(_REPO_ROOT / "fire.pt")))
 OCR_MODEL_PATH = Path(os.getenv("CCTV_OCR_MODEL", str(_REPO_ROOT / "ocr_detector.pt")))
-FIRE_CONF = 0.15       # cctv_agent.py 와 동일
-FIRE_TIMEOUT = 10.0    # 불꽃이 안 보인 뒤 테두리를 끄기까지 (초)
-INFER_EVERY = 2        # N프레임마다 1회 추론 (1 = 매 프레임, 추적 정확도는 높지만 느림)
-OCR_EVERY = 3.0        # OCR 실행 간격 (초)
-OCR_DEDUP_SEC = 30.0   # 같은 판독값은 이 시간 안에 다시 기록하지 않음
-OCR_DET_CONF = float(os.getenv("CCTV_OCR_DET_CONF", "0.5"))   # 숫자 영역 탐지 신뢰도
-OCR_MIN_PROB = float(os.getenv("CCTV_OCR_MIN_PROB", "0.5"))   # 이 이상 확신한 판독값만 대시보드에 기록
+FIRE_CONF = 0.15       
+FIRE_TIMEOUT = 10.0    
+INFER_EVERY = 2        
+OCR_EVERY = 3.0        
+OCR_DEDUP_SEC = 30.0   
+OCR_DET_CONF = float(os.getenv("CCTV_OCR_DET_CONF", "0.5"))   
+OCR_MIN_PROB = float(os.getenv("CCTV_OCR_MIN_PROB", "0.5"))   
 OCR_ALLOWLIST = os.getenv("CCTV_OCR_ALLOWLIST", "0123456789:.-/%") or None
-OCR_DEBUG = os.getenv("CCTV_OCR_DEBUG", "1") == "1"           # 판독 결과가 바뀔 때 터미널에 한 줄 출력
-OCR_MIN_DIGITS = int(os.getenv("CCTV_OCR_MIN_DIGITS", "2"))   # 판독값에 숫자가 최소 이 개수는 있어야 인정
-OCR_ENHANCE = os.getenv("CCTV_OCR_ENHANCE", "0") == "1"       # 1: 대비 보정(CLAHE) 버전도 읽어 더 확신 높은 결과 사용
-SHOW_STATUS = os.getenv("CCTV_SHOW_STATUS", "0") == "1"          # 영상 위 평상시 "AI ANALYZING..." 문구 (기본 숨김)
-SHOW_OCR_STATUS = os.getenv("CCTV_SHOW_OCR_STATUS", "0") == "1"  # 영상 위 "OCR: ON ..." 진단 문구 (기본 숨김)
+OCR_DEBUG = os.getenv("CCTV_OCR_DEBUG", "1") == "1"           
+OCR_MIN_DIGITS = int(os.getenv("CCTV_OCR_MIN_DIGITS", "2"))   
+OCR_ENHANCE = os.getenv("CCTV_OCR_ENHANCE", "0") == "1"       
+SHOW_STATUS = os.getenv("CCTV_SHOW_STATUS", "0") == "1"          
+SHOW_OCR_STATUS = os.getenv("CCTV_SHOW_OCR_STATUS", "0") == "1"  
 
 _fire_model = None
-_model_state = "loading"        # loading | ready | missing | error
-_model_lock = threading.Lock()  # YOLO 추론/추적 직렬화 (스레드 안전하지 않음)
+_model_state = "loading"        
+_model_lock = threading.Lock()  
 _ocr_model = None
 _ocr_reader = None
-_ocr_state = "loading"          # loading | ready | missing | error
+_ocr_state = "loading"          
 _ocr_lock = threading.Lock()
 
 
@@ -186,7 +184,7 @@ def _load_models_bg() -> None:
     except Exception as e:  # noqa: BLE001
         _model_state = _ocr_state = "error"
         print(f"[stream] ultralytics import failed: {e!r}")
-        print("[stream] 이 Python 환경에 ultralytics 가 없습니다. cctv_agent.py 를 돌리던 가상환경을 활성화한 뒤 서버를 실행하세요.")
+        print("[stream] 이 Python 환경에 ultralytics 가 없습니다. cctv_agent.py 를 돌리던 가상환경을 활성화한 뒤 서버 실행하세요.")
         return
 
     # 화재 모델 (필수)
@@ -248,9 +246,7 @@ def _device_not_found(device_id: str) -> HTTPException:
         detail={"code": "device_not_found", "message": f"device {device_id} not found"},
     )
 
-
 # --- Error envelope (COMMUNICATION_PROTOCOL.md §5) ---------------------------
-
 @app.exception_handler(HTTPException)
 async def _http_exc(_: Request, exc: HTTPException):
     if isinstance(exc.detail, dict) and "code" in exc.detail:
@@ -264,11 +260,9 @@ async def _http_exc(_: Request, exc: HTTPException):
     }.get(exc.status_code, "server_error")
     return _error(exc.status_code, code, str(exc.detail))
 
-
 @app.exception_handler(Exception)
 async def _unhandled(_: Request, exc: Exception):
     return _error(500, "server_error", str(exc))
-
 
 @app.exception_handler(RequestValidationError)
 async def _validation_exc(_: Request, exc: RequestValidationError):
@@ -276,7 +270,6 @@ async def _validation_exc(_: Request, exc: RequestValidationError):
 
 
 # --- Auth dependency ---------------------------------------------------------
-
 def authed_device(
     device_id: str = ApiPath(...),
     x_device_api_key: Optional[str] = Header(default=None, alias="X-Device-Api-Key"),
@@ -284,7 +277,6 @@ def authed_device(
     if REQUIRE_AUTH:
         require_api_key(device_id, x_device_api_key)
     return device_id
-
 
 # --- Ingest endpoints (edge → server) ---------------------------------------
 
@@ -296,7 +288,6 @@ async def post_heartbeat(
     storage.record_heartbeat(device_id, body.model_dump())
     return {"ok": True, "received_at": _now_iso()}
 
-
 @app.post("/api/devices/{device_id}/detections")
 async def post_detections(
     body: DetectionsIn,
@@ -306,7 +297,6 @@ async def post_detections(
     accepted = storage.append_detections(device_id, items)
     return {"ok": True, "accepted": accepted}
 
-
 @app.post("/api/devices/{device_id}/events")
 async def post_event(
     body: EventIn,
@@ -315,15 +305,35 @@ async def post_event(
     storage.append_event(device_id, body.model_dump())
     return {"ok": True}
 
-
+# =========================================================================
+# 💡 이벤트 기록 삭제 API (오염도 삭제 분기만 깔끔하게 제거됨)
+# =========================================================================
 @app.delete("/api/devices/{device_id}/events")
-async def delete_events(device_id: str):
+async def delete_events(device_id: str, type: Optional[str] = None):
     if not storage.device_exists(device_id):
         raise _device_not_found(device_id)
 
-    storage.clear_all_events(device_id)
-    return {"ok": True, "message": "All events completely deleted"}
+    if type == "fire":
+        targets = ["fire_tracking", "화재", "명령", "안내"]
+        if hasattr(storage, "clear_events_by_type"):
+            storage.clear_events_by_type(device_id, targets)
+        else:
+            storage.clear_all_events(device_id) 
 
+    elif type == "ocr":
+        if hasattr(storage, "clear_events_by_type"):
+            storage.clear_events_by_type(device_id, ["ocr_reading"])
+
+    elif type == "candidate":
+        targets = ["persistent_change_candidate", "cigarette_butt_detected", "litter_detected"]
+        if hasattr(storage, "clear_events_by_type"):
+            storage.clear_events_by_type(device_id, targets)
+        
+    else:
+        storage.clear_all_events(device_id)
+
+    return {"ok": True, "message": f"Events ({type or 'all'}) successfully deleted."}
+# =========================================================================
 
 @app.post("/api/devices/{device_id}/snapshots")
 async def post_snapshot(
@@ -357,7 +367,6 @@ async def post_snapshot(
 async def get_devices():
     return {"devices": storage.list_devices()}
 
-
 @app.get("/api/cameras")
 async def get_cameras():
     if CAMERAS_FILE.is_file():
@@ -368,7 +377,6 @@ async def get_cameras():
             print(f"[stream] cameras.json 읽기 실패: {e!r}")
     return {"cameras": []}
 
-
 @app.get("/api/devices/{device_id}")
 async def get_device(device_id: str):
     d = storage.get_device(device_id)
@@ -376,11 +384,9 @@ async def get_device(device_id: str):
         raise _device_not_found(device_id)
     return d
 
-
 def _check_limit(limit: int) -> None:
     if limit < 1 or limit > 1000:
         raise HTTPException(400, detail={"code": "bad_request", "message": "limit must be between 1 and 1000"})
-
 
 @app.get("/api/devices/{device_id}/detections")
 async def get_detections(
@@ -394,19 +400,19 @@ async def get_detections(
     _check_limit(limit)
     return {"detections": storage.query_detections(device_id, since=since, until=until, limit=limit)}
 
-
 @app.get("/api/devices/{device_id}/events")
 async def get_events(
     device_id: str,
     since: Optional[str] = None,
     until: Optional[str] = None,
     limit: int = 100,
+    event_type: Optional[str] = None,
 ):
     if not storage.device_exists(device_id):
         raise _device_not_found(device_id)
     _check_limit(limit)
-    return {"events": storage.query_events(device_id, since=since, until=until, limit=limit)}
-
+    wanted = [t.strip() for t in (event_type or "").split(",") if t.strip()]   # 쉼표로 여러 개 가능
+    return {"events": storage.query_events(device_id, since=since, until=until, limit=limit, event_types=wanted or None)}
 
 # --- Candidate review (지속 변화 후보 검수: 대시보드 <-> 서버) ----------------------
 
@@ -416,17 +422,18 @@ async def get_reviews(device_id: str):
         raise _device_not_found(device_id)
     return {"reviews": storage.list_reviews(device_id)}
 
-
 @app.put("/api/devices/{device_id}/reviews/{candidate_id}")
 async def put_review(
+    request: Request,
     candidate_id: str,
     body: ReviewIn,
     device_id: str = Depends(authed_device),
 ):
     if not storage.device_exists(device_id):
         raise _device_not_found(device_id)
-    return {"ok": True, "review": storage.set_review(device_id, candidate_id, body.label, body.note)}
-
+    tok = request.cookies.get(admin_auth.COOKIE)            
+    reviewer = _ADMIN.read_token(tok) if (tok and _ADMIN.enabled) else None
+    return {"ok": True, "review": storage.set_review(device_id, candidate_id, body.label, body.note, reviewer)}
 
 @app.get("/api/snapshots/{snapshot_id}")
 async def get_snapshot(snapshot_id: str):
@@ -434,7 +441,6 @@ async def get_snapshot(snapshot_id: str):
     if s is None:
         raise HTTPException(404, detail={"code": "device_not_found", "message": "snapshot not found"})
     return Response(content=s["data"], media_type=s["content_type"])
-
 
 # --- Video Streaming Endpoint (지도 관제 모달창 송출용) ---
 
@@ -445,7 +451,6 @@ SIZE_CHANGE_TH = 1000
 MOVE_TH = 50             
 _storage_lock = threading.Lock()
 
-
 def _emit_event(device_id: str, timestamp: str, event_type: str, severity: str, message: str) -> None:
     try:
         payload = EventIn(
@@ -455,7 +460,6 @@ def _emit_event(device_id: str, timestamp: str, event_type: str, severity: str, 
             storage.append_event(device_id, payload)
     except Exception as e:  # noqa: BLE001
         print(f"[stream] event save failed: {e!r}")
-
 
 CMD_POLL_SEC = 1.0       
 STREAM_SNAPSHOTS = os.getenv("CCTV_STREAM_SNAPSHOTS", "1") == "1"  
@@ -468,7 +472,6 @@ except Exception:  # noqa: BLE001
     psutil = None
     _proc = None
     _ncpu = 1
-
 
 def _emit_heartbeat(device_id: str, video: str, frames: int, fps: float, latency_ms: int, timestamp: str) -> None:
     try:
@@ -487,7 +490,6 @@ def _emit_heartbeat(device_id: str, video: str, frames: int, fps: float, latency
     except Exception as e:  # noqa: BLE001
         print(f"[stream] heartbeat save failed: {e!r}")
 
-
 def _store_snapshot(device_id: str, jpeg: bytes, frame_idx: int, source: str) -> None:
     try:
         snap_id = f"video_{frame_idx:05d}_{uuid.uuid4().hex[:6]}"
@@ -502,7 +504,6 @@ def _store_snapshot(device_id: str, jpeg: bytes, frame_idx: int, source: str) ->
     except Exception as e:  # noqa: BLE001
         print(f"[stream] snapshot save failed: {e!r}")
 
-
 def _manual_off_since(device_id: str, since_ts: float) -> float:
     with _storage_lock:
         recent = storage.query_events(device_id, since=None, until=None, limit=5)
@@ -514,14 +515,12 @@ def _manual_off_since(device_id: str, since_ts: float) -> float:
                 latest = max(latest, ts)
     return latest
 
-
 CAMERAS_FILE = Path(os.getenv(
     "CCTV_CAMERAS_FILE",
     str(Path(__file__).resolve().parent.parent / "static_dashboard" / "cameras.json"),
 ))
 _CAMERAS: dict = {}          
 _CAMERA_ID_OK = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
-
 
 def _load_cameras() -> None:
     _CAMERAS.clear()
@@ -549,11 +548,9 @@ def _load_cameras() -> None:
     except Exception as e:  # noqa: BLE001
         print(f"[stream] cameras.json 읽기 실패: {e!r}")
 
-
 @app.on_event("startup")
 def _startup_register_cameras() -> None:
     _load_cameras()
-
 
 def _resolve_video(filename: str) -> Path:
     candidate = (VIDEO_DIR / filename).resolve()
@@ -567,7 +564,6 @@ def _resolve_video(filename: str) -> Path:
         raise HTTPException(404, detail={"code": "not_found", "message": "video not found"})
     return candidate
 
-
 def _reset_tracker(model) -> None:
     try:
         pred = getattr(model, "predictor", None)
@@ -576,7 +572,6 @@ def _reset_tracker(model) -> None:
                 t.reset()
     except Exception as e:  # noqa: BLE001
         print(f"[stream] tracker reset skipped: {e!r}")
-
 
 def _drop_nested(dets):
     kept = []
@@ -592,7 +587,6 @@ def _drop_nested(dets):
         if not nested:
             kept.append(d)
     return kept
-
 
 def _read_crop(crop):
     def read(img):
@@ -618,7 +612,6 @@ def _read_crop(crop):
         if score(alt) > score(best):
             best, dropped = alt, alt_dropped
     return best, dropped
-
 
 def _ocr_job(device_id: str, frame, busy: threading.Event, sent: dict, view: dict) -> None:
     try:
@@ -669,7 +662,6 @@ def _ocr_job(device_id: str, frame, busy: threading.Event, sent: dict, view: dic
         print(f"[stream] ocr failed: {e!r}")
     finally:
         busy.clear()
-
 
 @app.get("/api/stream_video")
 def stream_video(filename: Optional[str] = None, camera: Optional[str] = None, loop: bool = False):
@@ -822,7 +814,6 @@ def stream_video(filename: Optional[str] = None, camera: Optional[str] = None, l
                             event_active = True
                             last_size, last_x, last_y = size, cx, cy
                             
-                            # 💡 [추가] 현재 프레임을 그 자리에서 즉시 jpg로 변환하여 안전하게 저장 및 이력 생성
                             ret, fire_buffer = cv2.imencode(".jpg", frame)
                             if ret:
                                 fire_jpeg = fire_buffer.tobytes()
@@ -837,7 +828,6 @@ def stream_video(filename: Optional[str] = None, camera: Optional[str] = None, l
                                     )
                                 incidents.create_incident(device_id, f"/api/snapshots/{snap_id}")
 
-                            # 💡 화재 최초 발생 순간, 텔레그램 스레드를 비동기로 실행하여 사진 전송
                             threading.Thread(
                                 target=send_telegram_fire_alert, 
                                 args=(device_id, frame.copy()), 
@@ -935,7 +925,6 @@ async def update_incident_api(incident_id: str, body: IncidentUpdate):
         raise HTTPException(404, detail="Incident not found")
     return {"ok": True, "incident": res}
 
-# --- 💡 알림 처리 이력 (Incidents) 삭제 API 추가 ---
 @app.delete("/api/incidents/{incident_id}")
 async def delete_incident_api(incident_id: str):
     success = incidents.delete_incident(incident_id)
@@ -958,25 +947,21 @@ def trigger_litter_pipeline(device_id: str):
     video_path = str(_resolve_video(cam["video"]))
     out_dir = str(_REPO_ROOT / "runs" / f"litter_{device_id}")
     
-    # 명령어 구성
-    # 명령어 구성
     cmd = [
         sys.executable, str(_REPO_ROOT / "test modul" / "butt_miner" / "run_pipeline.py"),
         "--video", video_path,
         "--out", out_dir,
         "--preset", "litter",
-        "--server", "http://localhost:8000",  # 💡 대시보드로 사진을 전송하는 옵션 추가
-        "--device-id", device_id              # 💡 어느 카메라 영상인지 인식하도록 추가
+        "--server", "http://localhost:8000",
+        "--device-id", device_id
     ]
     
-    # Popen을 사용하면 서버가 끝날 때까지 기다리지 않고 백그라운드에서 던져놓고 바로 돌아옵니다.
     subprocess.Popen(cmd)
-    
     print(f"[Litter] 🗑️ {device_id} 구역의 쓰레기 분석을 백그라운드에서 시작했습니다.")
     return {"ok": True, "message": "분석 시작됨"}
 
 
-# --- 💡 영구 보존용 오염도 통계 누적 API ---
+# --- 💡 영구 보존용 오염도 통계 누적 API (그래프 데이터 유지를 위해 반드시 필요) ---
 STATS_FILE = _REPO_ROOT / "pollution_stats.json"
 
 def _load_stats():
@@ -1006,7 +991,7 @@ def update_pollution_stat(body: StatUpdateIn):
     ds["daily"].setdefault(d, {})
     ds["daily"][d].setdefault(h, 0)
     
-    # 점수 누적 (삭제 시 마이너스 점수가 올 수 있으므로 반영하되 0 이하로는 안 내려가게 방어)
+    # 점수 누적
     ds["yearly"][y] = max(0, ds["yearly"][y] + body.score_diff)
     ds["monthly"][m] = max(0, ds["monthly"][m] + body.score_diff)
     ds["daily"][d][h] = max(0, ds["daily"][d][h] + body.score_diff)

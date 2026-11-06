@@ -93,7 +93,7 @@
             <span>자동 갱신</span>${sel("auto", [["0", "끔"], ["30", "30초"], ["60", "60초"]])}
             <span style="color:#6b7a90;">마지막 갱신 ${esc(state.updated || "-")} · 불러온 이벤트는 장치당 최대 ${FETCH_LIMIT}건</span>
         </div>`;
-        drawViz();
+        drawViz(); // 💡 시각화 처리 흐름 그리기 호출
     }
 
     function visibleRows() {
@@ -172,6 +172,7 @@
         } catch (_) { }
     }
 
+    // 💡 확정 면적 지표 계산 함수들 
     const FRAME = { w: 1920, h: 1080, gx: 16, gy: 9, fine: 10 };
     function boxOf(e) {
         const m = /위치\s*(-?\d+)\s*,\s*(-?\d+)/.exec(e.message || "");
@@ -196,6 +197,106 @@
         });
         const sum = (a) => a.reduce((s, v) => s + v, 0);
         return { used: used, cover: sum(fine) / fine.length, grid: sum(grid) / grid.length };
+    }
+
+    // 💡 오염 분포 시각화 차트/맵 영역
+    function ensureVisual() {
+        let el = document.getElementById("pollution-visual");
+        if (el) return el;
+        const t = document.getElementById("pollution-table");
+        if (!t || !t.parentNode || !t.parentNode.insertBefore) return null;
+        el = document.createElement("div");
+        el.id = "pollution-visual";
+        el.style.cssText = "display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;";
+        t.parentNode.insertBefore(el, t.nextSibling);
+        return el;
+    }
+
+    function paintMap(canvas, events) {
+        const ctx = canvas.getContext("2d");
+        const W = canvas.width, H = canvas.height;
+        const cw = W / FRAME.gx, ch = H / FRAME.gy, sx = W / FRAME.w, sy = H / FRAME.h;
+        ctx.clearRect(0, 0, W, H);
+        ctx.fillStyle = "#eef2f7";
+        ctx.fillRect(0, 0, W, H);
+        const boxes = events.map(boxOf).filter(Boolean);
+        const cnt = new Array(FRAME.gx * FRAME.gy).fill(0);
+        boxes.forEach((b) => {
+            const x0 = Math.max(0, b.x), y0 = Math.max(0, b.y), x1 = Math.min(FRAME.w, b.x + b.w), y1 = Math.min(FRAME.h, b.y + b.h);
+            if (x1 <= x0 || y1 <= y0) return;
+            for (let j = Math.floor(y0 / (FRAME.h / FRAME.gy)); j <= Math.floor((y1 - 1) / (FRAME.h / FRAME.gy)); j++)
+                for (let i = Math.floor(x0 / (FRAME.w / FRAME.gx)); i <= Math.floor((x1 - 1) / (FRAME.w / FRAME.gx)); i++) cnt[j * FRAME.gx + i]++;
+        });
+        cnt.forEach((n, k) => {
+            if (!n) return;
+            ctx.fillStyle = `rgba(217,83,79,${Math.min(0.85, 0.25 + 0.2 * n)})`;
+            ctx.fillRect((k % FRAME.gx) * cw, Math.floor(k / FRAME.gx) * ch, cw, ch);
+        });
+        ctx.strokeStyle = "#cfd8e6";
+        ctx.lineWidth = 1;
+        for (let i = 0; i <= FRAME.gx; i++) { ctx.beginPath(); ctx.moveTo(i * cw, 0); ctx.lineTo(i * cw, H); ctx.stroke(); }
+        for (let j = 0; j <= FRAME.gy; j++) { ctx.beginPath(); ctx.moveTo(0, j * ch); ctx.lineTo(W, j * ch); ctx.stroke(); }
+        ctx.strokeStyle = "#8b1e1e";
+        ctx.lineWidth = 2;
+        boxes.forEach((b) => ctx.strokeRect(b.x * sx, b.y * sy, Math.max(4, b.w * sx), Math.max(4, b.h * sy)));
+        if (!boxes.length) {
+            ctx.fillStyle = "#6b7a90";
+            ctx.font = "16px sans-serif";
+            ctx.textAlign = "center";
+            ctx.fillText("확정된 후보가 없습니다", W / 2, H / 2);
+        }
+    }
+
+    function drawVisual(list) {
+        const el = ensureVisual();
+        if (!el) return;
+        const maxS = POLLUTION.high * 2;
+        el.innerHTML = list.map((v, i) => {
+            const pct = Math.min(100, (v.score / maxS) * 100);
+            const lo = (POLLUTION.warn / maxS) * 100, hi = (POLLUTION.high / maxS) * 100;
+            return `<div class="pv-card" data-dev="${esc(v.dev)}" style="flex:1 1 360px;max-width:560px;background:#f8fafd;border:1px solid #dbe4f0;border-radius:8px;padding:12px 14px;">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;"><b>${esc(v.dev)}</b><span style="color:#6b7a90;font-size:12px;">${esc(v.location)}</span></div>
+                <div style="margin:8px 0 6px;display:flex;align-items:center;gap:10px;">
+                    <span style="font-size:30px;font-weight:bold;color:${v.color};">${v.score}점</span>
+                    <span style="background:${v.color};color:#fff;border-radius:10px;padding:2px 12px;font-size:13px;">${v.g}</span>
+                </div>
+                <div style="position:relative;height:12px;border-radius:6px;background:linear-gradient(to right,#2f6f62 ${lo}%,#e8892b ${lo}%,#e8892b ${hi}%,#d9534f ${hi}%);">
+                    <div style="position:absolute;top:-3px;left:calc(${pct}% - 3px);width:6px;height:18px;background:#1f2a3a;border-radius:3px;"></div>
+                </div>
+                <div style="position:relative;height:16px;font-size:11px;color:#6b7a90;margin:4px 0 8px;"><span style="position:absolute;left:0;">양호</span><span style="position:absolute;left:${lo}%;">주의 ${POLLUTION.warn}점~</span><span style="position:absolute;left:${hi}%;">높음 ${POLLUTION.high}점~</span></div>
+                <canvas id="pv-canvas-${i}" width="480" height="270" style="width:100%;border:1px solid #c8d4e6;border-radius:4px;background:#eef2f7;"></canvas>
+                <div style="font-size:12px;color:#44546a;margin-top:6px;">확정 면적 ${esc(v.cvText)} · 격자 점유 ${esc(v.gridText)} · 확정 후보 ${v.confirmed.length}개 (꽁초 ${v.nButt}, 쓰레기 ${v.nLit})</div>
+                <div style="font-size:11px;color:#6b7a90;margin-top:2px;">※ 사람이 확정한 후보의 위치를 1920x1080 화면 기준 16x9 격자에 그린 것입니다. 진한 칸일수록 확정 후보가 많이 걸쳤습니다. 실제 오염 수준을 잰 값이 아니며 배경 영상은 없습니다.</div>
+            </div>`;
+        }).join("");
+        list.forEach((v, i) => {
+            const c = document.getElementById(`pv-canvas-${i}`);
+            if (c && c.getContext) { try { paintMap(c, v.confirmed); } catch (_) { /* 그림만 포기 */ } }
+        });
+    }
+
+    // 💡 간단히 보기(자세히 보기) 토글 기능
+    function setupCompact(sec) {
+        const table = document.getElementById("pollution-table");
+        if (!table || document.getElementById("pollution-compact-btn")) return;
+        const st = document.createElement("style");
+        st.textContent = "#pollution-table.compact th:nth-child(5),#pollution-table.compact td:nth-child(5)," +
+            "#pollution-table.compact th:nth-child(7),#pollution-table.compact td:nth-child(7)," +
+            "#pollution-table.compact th:nth-child(8),#pollution-table.compact td:nth-child(8){display:none}" +
+            "#pollution-compact-btn{margin:6px 0;border:1px solid #c9d3e3;background:#fff;color:#44546a;border-radius:999px;padding:3px 12px;font-size:12px;cursor:pointer}" +
+            "#pollution-compact-btn:hover{background:#f4f6fa}";
+        document.head.appendChild(st);
+        let open = false;
+        try { open = localStorage.getItem("pollution_detail") === "1"; } catch (_) { /* 저장 못 해도 동작 */ }
+        const btn = document.createElement("button");
+        btn.id = "pollution-compact-btn"; btn.type = "button";
+        const paint = () => { table.classList.toggle("compact", !open); btn.textContent = open ? "간단히 보기 ▲" : "자세히 보기 ▼"; };
+        btn.addEventListener("click", () => {
+            open = !open; paint();
+            try { localStorage.setItem("pollution_detail", open ? "1" : "0"); } catch (_) { /* 무시 */ }
+        });
+        paint();
+        table.parentNode.insertBefore(btn, table);
     }
 
     function grade(score) {
@@ -223,9 +324,10 @@
             if (add) tr.insertAdjacentHTML("beforeend", add);
         }
 
+        setupCompact(sec); // 컴팩트 버튼 활성화
         const since = Date.now() - POLLUTION.hours * 3600 * 1000;
         
-        // 💡 local-ai-server 제외 필터링 적용
+        // 💡 본인 파일의 고유 기능인 local-ai-server 제외 필터링 적용
         let ids = deviceInfo.map((d) => d.device_id).filter(id => !isLocalServer(id));
         lastRows.forEach((e) => { 
             if (e.device_id && ids.indexOf(e.device_id) < 0 && !isLocalServer(e.device_id)) { 
@@ -238,6 +340,8 @@
             return;
         }
         const time = (t) => (typeof fmtTime === "function" ? fmtTime(t) : t);
+        
+        const vis = []; // 시각화 데이터용 배열
         
         tbody.innerHTML = ids.map((dev) => {
             const info = deviceInfo.find((d) => d.device_id === dev) || {};
@@ -255,21 +359,26 @@
             const pending = recent.filter((e) => !labelOf(e)).length;
             const score = nButt * POLLUTION.weight.cigarette_butt + nLit * POLLUTION.weight.other_litter;
             const [g, color] = grade(score);
-            const cv = coverageOf(recent.filter((e) => ["cigarette_butt", "other_litter"].indexOf(labelOf(e)) >= 0));
+            const confirmed = recent.filter((e) => ["cigarette_butt", "other_litter"].indexOf(labelOf(e)) >= 0);
+            const cv = coverageOf(confirmed);
             const cvText = (nButt + nLit) === 0 ? "0%" : (cv.used ? `${(cv.cover * 100).toFixed(2)}%` : "—");
             const gridText = (nButt + nLit) === 0 ? "0%" : (cv.used ? `${Math.round(cv.grid * 100)}%` : "—");
+            
+            vis.push({ dev: dev, location: info.location || "", score: score, g: g, color: color, nButt: nButt, nLit: nLit, confirmed: confirmed, cvText: cvText, gridText: gridText });
             
             return `<tr>
                 <td>${esc(dev)}</td>
                 <td>${esc(info.location || "-")}</td>
                 <td>${score}점 <small style="color:#6b7a90;">(꽁초 ${nButt}, 쓰레기 ${nLit})</small></td>
-                <td><span style="background:${color};color:#fff;border-radius:10px;padding:2px 10px;font-size:12px;">${g}</span></td>
+                <td><span style="display:inline-block;white-space:nowrap;min-width:44px;text-align:center;background:${color};color:#fff;border-radius:10px;padding:2px 10px;font-size:12px;">${g}</span></td>
                 <td>${lastUpdated === "—" ? "—" : esc(time(lastUpdated))}</td> 
                 <td>${pending}건</td>
                 <td>${cvText} <small style="color:#6b7a90;">(상자 ${cv.used}개)</small></td>
                 <td>${gridText}</td>
             </tr>`;
         }).join("");
+        
+        drawVisual(vis); // 시각화 그리기
     }
 
     // ---------- 처리 흐름 띠 + 격자 히트맵 ----------
@@ -528,7 +637,7 @@
     });
 
     // ==========================================
-    // 💡 2. 새 창(새 탭)에서 stats.html을 띄우는 전용 코드
+    // 💡 2. 새 창(새 탭)에서 stats.html을 띄우는 전용 코드 (본인 파일 고유 기능 유지)
     // ==========================================
     const btnShowStats = document.getElementById("btn-show-pollution-stats");
     if (btnShowStats) {

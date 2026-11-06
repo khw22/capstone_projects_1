@@ -1,0 +1,25 @@
+{
+  "video": "fire1.mp4",
+  "length_sec": 17.4,
+  "preset": "litter",
+  "config": {
+    "diff_thr": 20,
+    "min_area": 300,
+    "max_area": 40000,
+    "neighbor_ratio": 0,
+    "dedupe_px": 60,
+    "persist_sec": 8,
+    "exclude_person": true,
+    "bg_interval": 1,
+    "bg_min": 8
+  },
+  "shake": {
+    "mean_px": 0.5,
+    "p95_px": 0.53,
+    "max_px": 0.55
+  },
+  "candidates": 0,
+  "elapsed_sec": 24.9,
+  "realtime_factor": 0.7,
+  "uploaded": null
+}

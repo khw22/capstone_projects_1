@@ -14,7 +14,7 @@ Design
 - Snapshot bytes are stored as a BLOB.
 - DB path is configurable via ``CCTV_DB_PATH`` (default ``<repo>/data/cctv.db``);
   the ``data/`` dir is git-ignored.
-- ``rpi-001`` is seeded only when the ``devices`` table is empty; existing data
+- ``rpi-001`` is seeded only when the devices table is empty; existing data
   is never overwritten on restart.
 """
 
@@ -102,6 +102,10 @@ def _init(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    # 검수자(reviewer) 열: 예전 DB 에는 없으니 없을 때만 추가한다(기존 데이터는 그대로)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(reviews)").fetchall()]
+    if "reviewer" not in cols:
+        conn.execute("ALTER TABLE reviews ADD COLUMN reviewer TEXT")
     # Seed only when there are no devices yet (never clobber existing data).
     count = conn.execute("SELECT COUNT(*) FROM devices").fetchone()[0]
     if count == 0:
@@ -270,7 +274,7 @@ def get_snapshot(snapshot_id: str) -> Optional[dict]:
 # --- Reads -------------------------------------------------------------------
 
 def _query(table: str, device_id: str, since: Optional[str],
-           until: Optional[str], limit: int) -> List[dict]:
+           until: Optional[str], limit: int, event_types: Optional[List[str]] = None) -> List[dict]:
     # Mirror the previous in-memory semantics: ISO 8601 UTC strings sort
     # lexicographically; a NULL timestamp is always in range; return the most
     # recent `limit` matching rows in ascending insertion order (== list[-limit:]).
@@ -282,6 +286,9 @@ def _query(table: str, device_id: str, since: Optional[str],
     if until:
         where.append("(timestamp IS NULL OR timestamp <= ?)")
         params.append(until)
+    if event_types:                       # events 표 전용: payload 의 event_type 으로 거른다(limit 은 거른 뒤에 적용)
+        where.append("json_extract(payload_json, '$.event_type') IN (%s)" % ",".join("?" * len(event_types)))
+        params.extend(event_types)
     clause = " AND ".join(where)
     sql = (
         f"SELECT payload_json FROM ("
@@ -309,8 +316,38 @@ def query_events(
     since: Optional[str] = None,
     until: Optional[str] = None,
     limit: int = 100,
+    event_types: Optional[List[str]] = None,
 ) -> List[dict]:
-    return _query("events", device_id, since, until, limit)
+    return _query("events", device_id, since, until, limit, event_types)
+
+
+# =========================================================================
+# 💡 [핵심 추가] 특정 이벤트 타입만 골라서 지우는 전용 함수
+# =========================================================================
+def clear_events_by_type(device_id: str, event_types: List[str]) -> None:
+    """
+    특정 장치에서 지정된 이벤트 타입(예: 'ocr_reading', '화재' 등)만 골라서 
+    DB에서 영구 삭제합니다.
+    """
+    if not event_types:
+        return
+        
+    with _lock:
+        # SQLite의 JSON 추출 기능을 활용하여 payload_json 안의 event_type 값을 확인해 삭제합니다.
+        placeholders = ",".join("?" * len(event_types))
+        query = f"DELETE FROM events WHERE device_id = ? AND json_extract(payload_json, '$.event_type') IN ({placeholders})"
+        params = [device_id] + event_types
+        _conn.execute(query, params)
+        
+        # 💡 만약 삭제하는 타입에 '쓰레기/꽁초 후보'가 포함되어 있다면, 
+        # 후보가 사라지므로 사람이 검수한 내역(reviews)도 깔끔하게 비워줍니다.
+        candidate_types = {"persistent_change_candidate", "cigarette_butt_detected", "litter_detected"}
+        if any(t in candidate_types for t in event_types):
+            _conn.execute("DELETE FROM reviews WHERE device_id = ?", (device_id,))
+            
+        _conn.commit()
+# =========================================================================
+
 
 def clear_all_events(device_id: str) -> None:
     """특정 장치의 모든 이벤트 기록을 DB에서 영구 삭제합니다."""
@@ -323,22 +360,23 @@ def clear_all_events(device_id: str) -> None:
 
 # --- Candidate reviews -------------------------------------------------------
 
-def set_review(device_id: str, candidate_id: str, label: str, note: Optional[str] = None) -> dict:
+def set_review(device_id: str, candidate_id: str, label: str, note: Optional[str] = None,
+               reviewer: Optional[str] = None) -> dict:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     with _lock:
         _conn.execute(
-            "INSERT OR REPLACE INTO reviews (device_id, candidate_id, label, note, updated_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (device_id, candidate_id, label, note, now),
+            "INSERT OR REPLACE INTO reviews (device_id, candidate_id, label, note, updated_at, reviewer) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (device_id, candidate_id, label, note, now, reviewer),
         )
         _conn.commit()
-    return {"candidate_id": candidate_id, "label": label, "note": note, "updated_at": now}
+    return {"candidate_id": candidate_id, "label": label, "note": note, "updated_at": now, "reviewer": reviewer}
 
 
 def list_reviews(device_id: str) -> List[dict]:
     with _lock:
         rows = _conn.execute(
-            "SELECT candidate_id, label, note, updated_at FROM reviews "
+            "SELECT candidate_id, label, note, updated_at, reviewer FROM reviews "
             "WHERE device_id = ? ORDER BY updated_at",
             (device_id,),
         ).fetchall()

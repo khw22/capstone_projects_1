@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>환경지기 통합 관제</title>
+<style>
+  :root{--bg:#0f1b2a;--bar:#162538;--line:#2a3d55;--ink:#e8eef6;--mute:#8fa3ba;--accent:#4ea1ff}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:"Malgun Gothic","Apple SD Gothic Neo",sans-serif;overflow:hidden}
+  header{height:48px;display:flex;align-items:center;gap:14px;padding:0 14px;background:var(--bar);border-bottom:1px solid var(--line)}
+  header h1{margin:0;font-size:16px;white-space:nowrap}
+  header small{color:var(--mute);white-space:nowrap}
+  .sp{flex:1}
+  
+  /* 💡 추가: 상단 바에 띄울 날씨 위젯용 스타일 */
+  .weather-widget { display: flex; align-items: center; gap: 8px; margin-right: 15px; font-size: 13px; }
+  .weather-search { display: flex; gap: 4px; }
+  .weather-search input { padding: 3px 6px; border-radius: 4px; border: 1px solid var(--line); background: var(--bg); color: #fff; width: 110px; font-size: 12px; }
+  .weather-search button { background: var(--accent); border: none; border-radius: 4px; cursor: pointer; padding: 3px 6px; font-weight: bold; }
+  .weather-info { display: flex; align-items: center; gap: 6px; color: var(--ink); white-space: nowrap; }
+
+  .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  .seg button{background:transparent;color:var(--ink);border:0;padding:6px 12px;font-size:12px;cursor:pointer}
+  .seg button.on{background:var(--accent);color:#06121f;font-weight:bold}
+  header a,header .lo{color:#cfe3ff;text-decoration:none;font-size:12px;cursor:pointer;background:none;border:0}
+  header .lo{background:#c0392b;color:#fff;border-radius:999px;padding:5px 11px;font-weight:bold}
+  #who{font-size:12px;color:#9fc3ff}
+  .wrap{height:calc(100% - 48px);display:flex}
+  .pane{position:relative;min-width:0;height:100%}
+  .pane iframe{width:100%;height:100%;border:0;display:block;background:#fff}
+  #left{flex:0 0 var(--lw,60%)}
+  #right{flex:1 1 0;background:#f3f6fa}
+  #dv{flex:0 0 8px;cursor:col-resize;background:var(--line);position:relative}
+  #dv::after{content:"";position:absolute;left:2px;top:50%;width:4px;height:42px;margin-top:-21px;border-radius:2px;background:#6c86a6}
+  body.drag iframe{pointer-events:none}
+  body.mapOnly #right,body.mapOnly #dv{display:none}body.mapOnly #left{flex:1 1 auto}
+  body.dashOnly #left,body.dashOnly #dv{display:none}
+  @media (max-width:900px){
+    .wrap{flex-direction:column}
+    #left{flex:0 0 50%}#right{flex:1 1 0}#dv{display:none}
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>🛡 환경지기 통합 관제</h1><small>지도 + 중앙 대시보드</small>
+  <span class="sp"></span>
+
+  <!-- 💡 추가: 상단 바에 직접 배치된 날씨 위젯 HTML -->
+  <div class="weather-widget">
+    <div class="weather-search">
+      <input type="text" id="weather-input" placeholder="지역명 검색" />
+      <button id="btn-weather-search">🔍</button>
+    </div>
+    <div class="weather-info">
+      <span id="w-location">로딩 중...</span>
+      <span id="w-icon">☀️</span>
+      <span id="w-temp">--°C</span>
+      <span id="w-hum">💧--%</span>
+    </div>
+  </div>
+
+  <div class="seg" id="seg">
+    <button data-m="split" class="on">분할</button><button data-m="mapOnly">지도만</button><button data-m="dashOnly">대시보드만</button>
+  </div>
+  <span id="who"></span>
+  <a id="lo-link" style="display:none"></a>
+  <button class="lo" id="logout" style="display:none">로그아웃</button>
+</header>
+<div class="wrap">
+  <div class="pane" id="left"><iframe id="mapf" src="map.html" title="지도 관제"></iframe></div>
+  <div id="dv" title="끌어서 비율 조절"></div>
+  <div class="pane" id="right"><iframe id="dashf" src="index.html" title="중앙 대시보드"></iframe></div>
+</div>
+<script>
+  (function () {
+    var left = document.getElementById("left"), wrap = document.querySelector(".wrap");
+    function store(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+    function load(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+    var lw = parseFloat(load("control.lw"));
+    if (lw >= 25 && lw <= 80) left.style.setProperty("--lw", lw + "%");
+    var mode = load("control.mode"); if (["split", "mapOnly", "dashOnly"].indexOf(mode) < 0) mode = "split";
+    function setMode(m) {
+      document.body.classList.remove("mapOnly", "dashOnly"); if (m !== "split") document.body.classList.add(m);
+      document.querySelectorAll("#seg button").forEach(function (b) { b.classList.toggle("on", b.dataset.m === m); });
+      store("control.mode", m);
+    }
+    document.querySelectorAll("#seg button").forEach(function (b) { b.addEventListener("click", function () { setMode(b.dataset.m); }); });
+    setMode(mode);
+
+    var dv = document.getElementById("dv"), dragging = false;
+    dv.addEventListener("mousedown", function (e) { dragging = true; document.body.classList.add("drag"); e.preventDefault(); });
+    window.addEventListener("mouseup", function () { if (dragging) { dragging = false; document.body.classList.remove("drag"); store("control.lw", parseFloat(getComputedStyle(left).getPropertyValue("--lw")) || ""); } });
+    window.addEventListener("mousemove", function (e) {
+      if (!dragging) return;
+      var r = wrap.getBoundingClientRect(), pct = Math.min(80, Math.max(25, (e.clientX - r.left) / r.width * 100));
+      left.style.setProperty("--lw", pct + "%");
+    });
+
+    var dash = document.getElementById("dashf");
+    function prepDash() {
+      try {
+        var d = dash.contentDocument; if (!d || !d.head || d.getElementById("ctl-embed-style")) return;
+        var st = d.createElement("style"); st.id = "ctl-embed-style";
+        
+        // 💡 수정됨: 대시보드 내부의 날씨 위젯(.weather-widget)은 중복 방지를 위해 숨김 처리
+        st.textContent = ".topbar,.bottombar{display:none!important}.weather-widget{display:none!important}.content{padding-top:12px!important}" +
+          ".litter-hl{outline:3px solid #f5a35c!important;outline-offset:-2px;background:rgba(245,163,92,.18)!important}" +
+          ".data-table th,.data-table td{white-space:nowrap}#pollution,#cctv-table-wrap,section.card{overflow-x:auto}" +
+          "main.content{display:flex;flex-direction:column}main.content>#pollution{order:-2}main.content>#realtime{order:-1}" +
+          "#pollution .note{max-height:2.9em;overflow:hidden;cursor:pointer;position:relative}#pollution .note.open{max-height:none}" +
+          "#pollution .note:not(.open)::after{content:' ▼ 펼치기';position:absolute;right:0;bottom:0;background:#fff;padding-left:8px;color:#2f6f62;font-weight:bold}" +
+          ".pv-card.litter-hl{outline:3px solid #f5a35c!important;outline-offset:2px}";
+        d.head.appendChild(st);
+        
+        var st2 = d.createElement("style");
+        st2.textContent = "#pollution-table tbody tr,#cctv-table tbody tr{cursor:pointer}";
+        d.head.appendChild(st2);
+        d.addEventListener("click", function (e) {
+          var nt = e.target && e.target.closest ? e.target.closest("#pollution .note") : null;
+          if (nt) { nt.classList.toggle("open"); return; }
+          var tr = e.target && e.target.closest ? e.target.closest("#pollution-table tbody tr, #cctv-table tbody tr") : null;
+          if (!tr || !tr.cells || !tr.cells[0] || document.body.classList.contains("dashOnly")) return;
+          var id = tr.cells[0].textContent.trim();
+          try { document.getElementById("mapf").contentWindow.postMessage({ type: "litter-pan", id: id }, location.origin); } catch (_) { /* 무시 */ }
+        });
+      } catch (e) { /* 무시 */ }
+    }
+    dash.addEventListener("load", prepDash);
+
+    window.addEventListener("message", function (ev) {
+      if (ev.origin !== location.origin || !ev.data || ev.data.type !== "litter-focus") return;
+      if (document.body.classList.contains("mapOnly")) return;
+      try {
+        var d = dash.contentDocument, id = String(ev.data.id || ""), first = null;
+        d.querySelectorAll("#pollution-table tbody tr").forEach(function (tr) {
+          var c0 = tr.cells && tr.cells[0];
+          if (c0 && c0.textContent.trim() === id) { tr.classList.add("litter-hl"); first = first || tr; setTimeout(function () { tr.classList.remove("litter-hl"); }, 3500); }
+        });
+        var card = null;
+        d.querySelectorAll(".pv-card").forEach(function (cd) {
+          if (cd.getAttribute("data-dev") === id) { card = cd; cd.classList.add("litter-hl"); setTimeout(function () { cd.classList.remove("litter-hl"); }, 3500); }
+        });
+        var t = card || first || d.getElementById("pollution");
+        if (t && t.scrollIntoView) t.scrollIntoView({ behavior: "smooth", block: card ? "center" : "start" });
+      } catch (e) { /* 무시 */ }
+    });
+
+    fetch("/api/auth/me", { credentials: "same-origin" }).then(function (r) {
+      if (r.status === 401) { location.href = "/login.html?next=/control.html"; return null; }
+      return r.ok ? r.json() : null;
+    }).then(function (i) {
+      if (!i) return;
+      document.getElementById("who").textContent = i.auth_enabled ? "👤 " + (i.user || "관리자") : "⚠ 로그인 보호 꺼짐";
+      if (i.auth_enabled) {
+        var b = document.getElementById("logout"); b.style.display = "";
+        b.addEventListener("click", function () { fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }).finally(function () { location.href = "/login.html"; }); });
+      }
+    }).catch(function () {});
+  })();
+</script>
+
+<!-- 💡 추가: 상단 바에 삽입된 날씨 위젯을 작동시키는 스크립트 (더 넓은 지역명 추출 포함) -->
+<script>
+async function updateWeather(lat, lon, locationName) {
+    try {
+        const res = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code`);
+        const data = await res.json();
+        const temp = data.current.temperature_2m;
+        const hum = data.current.relative_humidity_2m;
+        const code = data.current.weather_code;
+        
+        let icon = "☀️";
+        if (code >= 1 && code <= 3) icon = "⛅";
+        else if (code >= 45 && code <= 48) icon = "🌫️";
+        else if (code >= 51 && code <= 67) icon = "🌧️";
+        else if (code >= 71 && code <= 77) icon = "❄️";
+        else if (code >= 80 && code <= 82) icon = "☔";
+        else if (code >= 95) icon = "⛈️";
+        
+        document.getElementById('w-location').textContent = locationName;
+        document.getElementById('w-temp').textContent = `${temp}°C`;
+        document.getElementById('w-hum').textContent = `💧${hum}%`;
+        document.getElementById('w-icon').textContent = icon;
+    } catch (e) {
+        console.error("날씨 정보 로드 실패", e);
+    }
+}
+
+async function searchLocation(query) {
+    try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`);
+        const data = await res.json();
+        if (data.length > 0) {
+            updateWeather(data[0].lat, data[0].lon, query);
+        } else {
+            alert("검색하신 지역을 찾을 수 없습니다.");
+        }
+    } catch (e) {
+        alert("지역 검색 중 오류가 발생했습니다.");
+    }
+}
+
+function loadCurrentLocationWeather() {
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(async (position) => {
+            const lat = position.coords.latitude;
+            const lon = position.coords.longitude;
+            try {
+                const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`);
+                const data = await res.json();
+                
+                // 더 정확한 지역명 추출을 위해 다양한 주소 속성 확인
+                let locName = "인천광역시"; 
+                if (data.address) {
+                    locName = data.address.city || data.address.county || data.address.town || data.address.borough || data.address.suburb || data.address.municipality || "현재 위치";
+                }
+                updateWeather(lat, lon, locName);
+            } catch (e) {
+                updateWeather(lat, lon, "현재 위치");
+            }
+        }, () => {
+            // 위치 권한 거부 시 기본값 표출 (인천)
+            updateWeather(37.4563, 126.7052, "인천광역시");
+        });
+    } else {
+        updateWeather(37.4563, 126.7052, "인천광역시");
+    }
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    const btnSearch = document.getElementById("btn-weather-search");
+    const inputSearch = document.getElementById("weather-input");
+
+    if (btnSearch && inputSearch) {
+        btnSearch.addEventListener("click", () => {
+            const query = inputSearch.value.trim();
+            if (query) searchLocation(query);
+        });
+
+        inputSearch.addEventListener("keypress", (e) => {
+            if (e.key === "Enter") {
+                const query = inputSearch.value.trim();
+                if (query) searchLocation(query);
+            }
+        });
+    }
+
+    loadCurrentLocationWeather();
+});
+</script>
+</body>
+</html>

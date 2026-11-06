@@ -137,7 +137,6 @@
         @keyframes slideInLeft { from { opacity: 0; transform: translateX(-20px); } to { opacity: 1; transform: translateX(0); } }
         .address-text { line-height: 1.4; word-break: keep-all; flex-grow: 1; }
         
-        /* 💡 119 신고 복사 버튼 추가 스타일 */
         .action-buttons { display: flex; gap: 5px; justify-content: flex-end; margin-top: 4px;}
         .report-119-btn {
             background: #c0392b; color: white; border: none; padding: 5px 10px;
@@ -167,7 +166,6 @@
         <div id="cctv-list-container"></div>
     </div>
 
-    <!-- 💡 수정된 좌측 하단 로그 패널 -->
     <div id="address-log-panel">
         <div class="address-header">
             <h3>🚨 화재 발생 위치 및 신고 로그</h3>
@@ -191,7 +189,7 @@
         var mapContainer = document.getElementById('map');
         var mapOption = { center: new kakao.maps.LatLng(37.3908, 126.9195), level: 3 };
         var map = new kakao.maps.Map(mapContainer, mapOption);
-
+/*
         var polygonPath = [
             new kakao.maps.LatLng(37.3935, 126.9160), new kakao.maps.LatLng(37.3935, 126.9230),
             new kakao.maps.LatLng(37.3880, 126.9230), new kakao.maps.LatLng(37.3880, 126.9160)
@@ -201,9 +199,10 @@
             fillStyle: 'solid', fillColor: '#FF8AEF', fillOpacity: 0.4
         });
         polygon.setMap(map);
+*/
 
         var geocoder = new kakao.maps.services.Geocoder(); 
-        var ps = new kakao.maps.services.Places(); // 💡 장소 검색 객체 추가
+        var ps = new kakao.maps.services.Places(); 
 
         var FIRE_WINDOW_MS = 15000;
         var POLL_MS = 2000;           
@@ -216,19 +215,17 @@
         var addressState = {}; 
         var isSirenMuted = false;
 
-        // 💡 확산 예측 부채꼴(Polygon)을 담을 객체 및 시간에 따라 퍼져나가는 확산 애니메이션 로직
         var spreadPolygons = {};
         var spreadTimers = {}; 
 
-        // 💡 화재 확산 예측 범위 그리기 함수
+        // 💡 점차 퍼져나가는 화재 확산 애니메이션 함수
         function drawSpreadPrediction(cam) {
-            if (spreadPolygons[cam.id]) return; // 이미 그려져 있으면 패스
+            if (spreadPolygons[cam.id]) return; 
 
-            // 시연용 설정: 현재 계절(바람) 풍향을 임의로 '북서풍(남동쪽 135도 방향으로 불어감)'으로 고정
             var windAngle = 135; 
-            var spreadAngle = 35; // 부채꼴 퍼짐 각도 (좌우 35도)
-            var maxDist = 0.012; // 💡 최대 확산 반경
-            var currentDist = 0.001; // 💡 시작 반경 (점점 커짐)
+            var spreadAngle = 35; 
+            var maxDist = 0.012; 
+            var currentDist = 0.001; 
 
             var p1 = new kakao.maps.LatLng(cam.lat, cam.lng);
             var spreadPolygon = new kakao.maps.Polygon({
@@ -238,12 +235,10 @@
             spreadPolygon.setMap(map);
             spreadPolygons[cam.id] = spreadPolygon;
 
-            // 💡 1초마다 반경(currentDist)을 증가시켜 애니메이션 효과 구현
             spreadTimers[cam.id] = setInterval(function() {
                 if (currentDist >= maxDist) { clearInterval(spreadTimers[cam.id]); return; }
                 currentDist += 0.0003; 
 
-                // 한국의 위/경도 비율을 고려해 y(lat)와 x(lng) 계산
                 var radLeft = (windAngle - spreadAngle) * Math.PI / 180;
                 var radRight = (windAngle + spreadAngle) * Math.PI / 180;
                 var p2 = new kakao.maps.LatLng(cam.lat + Math.cos(radLeft)*currentDist, cam.lng + Math.sin(radLeft)*currentDist*1.25);
@@ -253,7 +248,6 @@
             }, 1000);
         }
 
-        // 💡 확산 예측 범위 지우기 함수
         function removeSpreadPrediction(camId) {
             if (spreadPolygons[camId]) {
                 spreadPolygons[camId].setMap(null);
@@ -265,7 +259,6 @@
             }
         }
 
-        // 💡 119 신고 문안 자동 복사 함수
         function copy119(address, camName) {
             var timeStr = new Date().toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit' });
             var text = `[스마트 관제 긴급 화재신고]\n- 발생시간: ${timeStr}\n- 발생지: ${address}\n- 상세구역: ${camName} CCTV 화재 감지\n- 특이사항: 풍향 영향으로 남동쪽 화재 확산 우려\n- 즉시 출동 바랍니다.`;
@@ -308,7 +301,6 @@
             toast.className = 'toast-msg';
             toast.id = 'toast-' + cam.id;
             
-            // 💡 팝업에 풍향 경고 메시지 추가
             toast.innerHTML = `
                 <div style="display: flex; flex-direction: column; gap: 5px;">
                     <span>🔥 [${cam.id}] ${cam.name ? cam.name + ' 구역 ' : ''}화재 감지!</span>
@@ -357,7 +349,6 @@
             item.className = 'address-item';
             var timeStr = new Date().toLocaleTimeString('ko-KR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
             
-            // 💡 119 신고 복사 버튼 추가
             item.innerHTML = `
                 <div class="address-text">
                     <span style="color: #c0392b; font-size: 11px;">[${timeStr}] ${cam.name || cam.id}</span><br>
@@ -431,7 +422,7 @@
             panelContainer.appendChild(itemEl);
             panelItems[cam.id] = itemEl;
 
-            // 💡 카메라가 추가될 때 반경 3km 내의 소방 자원을 검색해서 마커로 띄움
+            // 💡 3km 이내 주변 소방서 자동 검색 및 마커 표시
             ps.keywordSearch('소방서', function(data, status) {
                 if (status === kakao.maps.services.Status.OK) {
                     data.forEach(function(place) {
@@ -447,7 +438,9 @@
         }
 
         function openCamera(cam) {
+            // 💡 모달창 오픈 시 백그라운드 쓰레기 분석 파이프라인 자동 호출 연동
             fetch('/api/devices/' + encodeURIComponent(cam.id) + '/run-litter').catch(function(e){});
+
             if (toastState[cam.id] === 'DISMISSED') toastState[cam.id] = 'IDLE';
             if (panelState[cam.id] === 'DISMISSED') panelState[cam.id] = 'IDLE';
             addressState[cam.id] = 'IDLE';
@@ -481,7 +474,6 @@
                         var isFireNow = (latest > 0 && (nowMs - latest) <= FIRE_WINDOW_MS);
                         
                         if (isFireNow) {
-                            // 💡 화재 발생 시 풍향 예측 범위 그리기
                             drawSpreadPrediction(cam);
 
                             if (!addressState[cam.id] || addressState[cam.id] === 'IDLE') {
@@ -502,7 +494,6 @@
                                 if (pEl) { pEl.classList.add('fire'); }
                             }
                         } else {
-                            // 💡 화재 종료 시 풍향 예측 범위 삭제
                             removeSpreadPrediction(cam.id);
 
                             if (toastState[cam.id] === 'DISMISSED') { toastState[cam.id] = 'IDLE'; }
@@ -536,5 +527,8 @@
             document.getElementById('videoStream').src = "";
         }
     </script>
+    <!-- 💡 부가 모듈 스크립트 연결 복원 -->
+    <script src="litter_map.js"></script>
+    <script src="admin_bar.js"></script>
 </body>
 </html>
