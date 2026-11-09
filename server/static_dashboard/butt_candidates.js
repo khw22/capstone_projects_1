@@ -93,6 +93,14 @@
             <span>자동 갱신</span>${sel("auto", [["0", "끔"], ["30", "30초"], ["60", "60초"]])}
             <span style="color:#6b7a90;">마지막 갱신 ${esc(state.updated || "-")} · 불러온 이벤트는 장치당 최대 ${FETCH_LIMIT}건</span>
         </div>`;
+        
+        // 💡💡💡 추가하신 부분 시작 💡💡💡
+        const table = document.getElementById("butt-table");
+        if (table && !table.parentNode.classList.contains("scroll-box")) {
+            table.outerHTML = `<div class="scroll-box">` + table.outerHTML + `</div>`;
+        }
+        // 💡💡💡 추가하신 부분 끝 💡💡💡
+
         drawViz(); // 💡 시각화 처리 흐름 그리기 호출
     }
 

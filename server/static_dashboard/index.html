@@ -86,9 +86,7 @@
                     <button id="btn-show-pollution-stats" style="padding: 6px 12px; cursor: pointer; background: #3b5998; color: white; border: none; border-radius: 4px; font-weight: bold;">📊 누적수치 보기</button>
                 </div>
             </div>
-            <p class="note">
-                ※ 오염도 점수는 현재 통신 규약(v0.1)에 정의되어 있지 않아 백엔드에서 제공되지 않습니다. 프로토콜 확장 후 연동 예정입니다.
-            </p>
+        
             <h3>장치별 오염도 점수</h3>
             <table class="data-table" id="pollution-table">
                 <thead>
@@ -111,7 +109,8 @@
                 <button id="btn-clear-ocr" style="padding: 6px 12px; cursor: pointer; background: #ff6b6b; color: white; border: none; border-radius: 4px; font-weight: bold;">🧹 OCR 초기화</button>
             </div>
             <p class="note">※ CCTV 영상 내의 시계, 온습도계 등의 수치를 AI가 판독하여 표시합니다.</p>
-            <table class="data-table" id="ocr-table">
+            <div class="scroll-box">
+                <table class="data-table" id="ocr-table">
                 <thead>
                     <tr>
                         <th>장치 ID</th>
@@ -165,7 +164,7 @@
                 ※ YOLOv8 모델이 화재 객체를 처음 인식한 좌표(발화점)를 추적하여 표시합니다.
             </p>
             <p id="fire-where" style="display: none; margin: 8px 0; font-size: 15px; color: #ff4757;"></p>
-            <div class="table-responsive">
+            <div class="table-responsive scroll-box">
                 <table id="fire-origin-table" class="data-table">
                     <thead>
                         <tr>
@@ -186,7 +185,8 @@
                 <h2 style="margin: 0; color: #e67e22;">📝 알림 처리 이력 (진압 프로세스)</h2>
                 <button onclick="clearAllIncidents()" style="padding: 6px 12px; cursor: pointer; background: #ff6b6b; color: white; border: none; border-radius: 4px; font-weight: bold;">🧹 전체 이력 지우기</button>
             </div>
-            <table class="data-table" id="incident-table" style="margin-top: 15px;">
+            <div class="scroll-box" style="margin-top: 15px;">
+                <table class="data-table" id="incident-table">
                 <thead>
                     <tr>
                         <th>발생 일시</th>
@@ -212,7 +212,8 @@
                     <button id="btn-clear" style="padding: 6px 12px; cursor: pointer; background: #ff6b6b; color: white; border: none; border-radius: 4px; font-weight: bold;">🧹 화면 지우기</button>
                 </div>
             </div>
-            <table class="data-table" id="events-table" style="margin-top: 15px;">
+            <div class="table-responsive scroll-box" style="margin-top: 15px;">
+                <table class="data-table" id="events-table">
                 <thead>
                     <tr>
                         <th>시각</th>

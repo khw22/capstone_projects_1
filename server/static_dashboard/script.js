@@ -308,8 +308,9 @@ async function loadEvents(devices) {
     }
 
     // 3. OCR 판독 결과 렌더링
+    // 변경 후 (100개까지 유지)
     if (ocrEvents.length > 0) {
-        setBodyLive("ocr-table", ocrEvents.slice(0, 5).map((e) => `
+        setBodyLive("ocr-table", ocrEvents.slice(0, 100).map((e) => `
             <tr data-k="${evKey(e)}">
                 <td>${devLabel(e.device_id)}</td>
                 <td>${fmtTime(e.timestamp)}</td>
